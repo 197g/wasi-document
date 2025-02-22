@@ -184,7 +184,6 @@ async function mount({ module_or_path, wasi_root_fs }) {
     ];
 
     ops[255] = undefined;
-    document.documentElement.textContent = '\n';
 
     try {
       while (iptr < instruction_stream.length) {
@@ -202,7 +201,7 @@ async function mount({ module_or_path, wasi_root_fs }) {
       document.documentElement.textContent += '\nError: '+e;
     }
 
-    document.documentElement.textContent += `Initialized towards stage3 in ${ops.length-256} steps`;
+    console.log(`Initialized towards stage3 in ${ops.length-256} steps`);
   }
 
   let args = configuration.args;

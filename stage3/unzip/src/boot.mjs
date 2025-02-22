@@ -1,3 +1,65 @@
+class ProcessSettled {
+  #configuration;
+  #imports;
+  #element;
+
+  constructor(configuration, imports, element) {
+    this.configuration = configuration;
+    this.imports = imports;
+    this.element = element;
+  }
+
+  file_data(path) {
+    return this.configuration.fds[3]
+      ?.path_open(0, path, 0, 0)
+      ?.fd_obj
+      ?.file.data.buffer;
+  }
+
+  insert(output) {
+    this.element.innerHTML = output;
+  }
+
+  replace(output) {
+    this.element.outerHTML = output;
+  }
+
+  async dispatch({ executable, args, stdin, stdout, stderr }) {
+    const root_fs = this.configuration.fds[3];
+    const post_process = root_fs
+      ?.path_open(0, executable, 0, 0)
+      ?.fd_obj;
+
+    let blob = new Blob([post_process.file.data.buffer], { type: 'application/wasm' });
+
+    let wasm = await WebAssembly.compileStreaming(new Response(blob));
+
+    // FIXME: no, we do not want to default these paths. The respective files
+    // should be simulated and not bound to any path in the file system. Also
+    // like have a `/dev/null` right?
+    var fds = [];
+    fds[0] = root_fs?.path_open(0, stdin || 'stdin', 1, 1)?.fd_obj;
+    fds[1] = root_fs?.path_open(0, stdout || 'stdout', 1, 1)?.fd_obj;
+    fds[2] = root_fs?.path_open(0, stderr || 'stderr', 1, 1)?.fd_obj;
+    fds[3] = root_fs;
+    console.log(fds);
+
+    let newWasi = new this.configuration.WASI(args, [], fds);
+    var wasi_imports = { 'wasi_snapshot_preview1': newWasi.wasiImport };
+    const instance = await WebAssembly.instantiate(wasm, wasi_imports);
+
+    try {
+      await newWasi.start({ 'exports': instance.exports });
+    } catch (e) {
+      if (typeof(e) == 'string' && e == 'exit with exit code 0') {} else {
+        throw e;
+      }
+    }
+
+    return fds;
+  }
+}
+
 export default async function(configuration) {
   /* Problem statement:
    * We'd like to solve the problem of exporting our current WASI for use by
@@ -103,6 +165,7 @@ export default async function(configuration) {
 
   try {
     console.log('Dispatch stage3 into init', configuration);
+    var wasi_imports = { 'wasi_snapshot_preview1': newWasi.wasiImport };
 
     // The init process controls the whole body in the end.
     reaper.push({
@@ -123,21 +186,23 @@ export default async function(configuration) {
       // FIXME: but replacement should also be possible early if we want to
       // avoid flicker.
       element: document.getElementsByTagName('body')[0],
+      imports: wasi_imports,
     });
 
     var source_headers = {};
-    const wasmblob = new Blob([configuration.wasm], { type: 'application/wasm' });
+    var wasi_exports = undefined;
 
     if (kernel_module !== undefined) {
-      const ret = await kernel_module.default(Promise.resolve(new Response(wasmblob, {
+      const wasmblob = new Blob([configuration.wasm], { type: 'application/wasm' });
+      wasi_exports = await kernel_module.default(Promise.resolve(new Response(wasmblob, {
         'headers': source_headers,
       })));
 
-      await newWasi.start({ 'exports': ret });
+      await newWasi.start({ 'exports': wasi_exports });
     } else {
-      const imports = { 'wasi_snapshot_preview1': newWasi.wasiImport };
-      const instance = await WebAssembly.instantiate(wasm, imports);
-      await newWasi.start({ 'exports': instance.exports });
+      const instance = await WebAssembly.instantiate(wasm, wasi_imports);
+      wasi_exports = instance.exports;
+      await newWasi.start({ 'exports': wasi_exports });
     }
   } catch (e) {
     if (typeof(e) == 'string' && e == 'exit with exit code 0') {} else {
@@ -171,7 +236,7 @@ export default async function(configuration) {
     // layer is, after all, below us and thus our 'target platform' it would be
     // much nicer if we had a more fine-grained decision about the exposed
     // object where everything / most is opt-in and explicitly requested.
-    return await post_handler(proc);
+    return await post_handler(new ProcessSettled(proc.configuration, proc.imports, proc.element));
   }));
 
   let have_an_error = undefined;

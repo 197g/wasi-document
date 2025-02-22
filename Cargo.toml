@@ -41,6 +41,11 @@ members = [
   "examples/wasi/plotters-normal-2d",
 ]
 
+exclude = [
+	"examples/GladiusSlicer/GladiusSlicer",
+	"examples/fidget/fidget",
+]
+
 [workspace.dependencies]
 html_and_tar = { path = "lib/html_and_tar" }
 
