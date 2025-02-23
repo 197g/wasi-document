@@ -24,7 +24,7 @@ class ProcessSettled {
     this.element.outerHTML = output;
   }
 
-  async dispatch({ executable, args, stdin, stdout, stderr }) {
+  async dispatch({ executable, args, stdin, stdout, stderr, element }) {
     const root_fs = this.configuration.fds[3];
     const post_process = root_fs
       ?.path_open(0, executable, 0, 0)
@@ -56,7 +56,7 @@ class ProcessSettled {
       }
     }
 
-    return fds;
+    return new ProcessSettled(newWasi, wasi_imports, element);
   }
 }
 
@@ -167,6 +167,16 @@ export default async function(configuration) {
     console.log('Dispatch stage3 into init', configuration);
     var wasi_imports = { 'wasi_snapshot_preview1': newWasi.wasiImport };
 
+    // FIXME: hardcoded, should be configurable. Also if we launch multiple
+    // process instances concurrently then they are configured by finding a
+    // number of `<template>` elements that contain instructions for a
+    // derived configuration in that shared environment. Then the context is
+    // that element itself, allowing it to be replaced with the actual
+    // rendering intent.
+    var element = document.getElementById('wasi-document-init')
+      || document.getElementsByTagName('body')[0];
+    console.log('Using init element', element);
+
     // The init process controls the whole body in the end.
     reaper.push({
       configuration: configuration,
@@ -176,16 +186,12 @@ export default async function(configuration) {
       override_file: 'proc/0/display.mjs',
       // The element context.
       //
-      // FIXME: hardcoded, should be configurable. Also if we launch multiple
-      // process instances concurrently then they are configured by finding a
-      // number of `<template>` elements that contain instructions for a
-      // derived configuration in that shared environment. Then the context is
-      // that element itself, allowing it to be replaced with the actual
-      // rendering intent.
-      //
-      // FIXME: but replacement should also be possible early if we want to
-      // avoid flicker.
-      element: document.getElementsByTagName('body')[0],
+      // FIXME: replacement should also be possible early if we want to avoid
+      // flicker. That is before this stops running. A balanced approach may be
+      // enabled by WASI 0.2's component model where we have `async` / stream
+      // functions. That is functions that yield to the host multiple times
+      // before setting a result.
+      element: element,
       imports: wasi_imports,
     });
 
