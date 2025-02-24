@@ -1,0 +1,29 @@
+[package]
+name = "wasm-as-html"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.82"
+
+[dependencies]
+wasm-encoder = "0.20"
+wasmparser = "0.95"
+[dependencies.clap]
+version = "4"
+features = ["derive"]
+[dependencies.base64]
+version = "0.21.4"
+default-features = false
+features = ["alloc"]
+[dependencies.lithtml]
+version = "0.7.0"
+optional = true
+[dependencies.html_and_tar]
+workspace = true
+[dependencies.walkdir]
+version = "2.5"
+[dependencies.zip]
+version = "2"
+
+[features]
+default = ["target-html+tar"]
+"target-html+tar" = ["dep:lithtml"]
