@@ -23,7 +23,7 @@ cargo build --release -p unzip --target wasm32-wasip1
 
 cargo run --\
  --target html+tar\
- --index-html examples/uutils/index.html wasi-loader/out.js\
+ --index-html examples/uutils/index.html stage2-loader/out.js\
  --stage3 target/wasm32-wasip1/release/unzip.wasm\
  --root-fs examples/uutils/root/\
  < examples/uutils/bin/coreutils.wasm  > /tmp/out.html

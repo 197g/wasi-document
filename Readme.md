@@ -157,7 +157,7 @@ For HTML:
     - The stage2-wasi will now transfer control over to WASI as the main
       driver. It begins by invoking another intermediate stage program to
       control the setup of the WASI system, similar to Unix `init`.
-      See [stage2](wasi-loader/Readme.md) for more.
+      See [stage2](stage2-loader/Readme.md) for more.
 - The default stage3 will now inspect and process the bundled zip data. This
   module takes the role of bootloader for the original module. The zip-file
   will be treated similar to an initial disk. The astute reader might instead
