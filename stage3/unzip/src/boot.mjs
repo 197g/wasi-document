@@ -1,3 +1,65 @@
+class ProcessSettled {
+  #configuration;
+  #imports;
+  #element;
+
+  constructor(configuration, imports, element) {
+    this.configuration = configuration;
+    this.imports = imports;
+    this.element = element;
+  }
+
+  file_data(path) {
+    return this.configuration.fds[3]
+      ?.path_open(0, path, 0, 0)
+      ?.fd_obj
+      ?.file.data.buffer;
+  }
+
+  insert(output) {
+    this.element.innerHTML = output;
+  }
+
+  replace(output) {
+    this.element.outerHTML = output;
+  }
+
+  async dispatch({ executable, args, stdin, stdout, stderr, element }) {
+    const root_fs = this.configuration.fds[3];
+    const post_process = root_fs
+      ?.path_open(0, executable, 0, 0)
+      ?.fd_obj;
+
+    let blob = new Blob([post_process.file.data.buffer], { type: 'application/wasm' });
+
+    let wasm = await WebAssembly.compileStreaming(new Response(blob));
+
+    // FIXME: no, we do not want to default these paths. The respective files
+    // should be simulated and not bound to any path in the file system. Also
+    // like have a `/dev/null` right?
+    var fds = [];
+    fds[0] = root_fs?.path_open(0, stdin || 'stdin', 1, 1)?.fd_obj;
+    fds[1] = root_fs?.path_open(0, stdout || 'stdout', 1, 1)?.fd_obj;
+    fds[2] = root_fs?.path_open(0, stderr || 'stderr', 1, 1)?.fd_obj;
+    fds[3] = root_fs;
+    console.log(fds);
+
+    let newWasi = new this.configuration.WASI(args, [], fds);
+    var wasi_imports = { 'wasi_snapshot_preview1': newWasi.wasiImport };
+    const instance = await WebAssembly.instantiate(wasm, wasi_imports);
+
+    try {
+      await newWasi.start({ 'exports': instance.exports });
+    } catch (e) {
+      if (typeof(e) == 'string' && e == 'exit with exit code 0') {} else {
+        throw e;
+      }
+    }
+
+    return new ProcessSettled(newWasi, wasi_imports, element);
+  }
+}
+
 export default async function(configuration) {
   /* Problem statement:
    * We'd like to solve the problem of exporting our current WASI for use by
@@ -26,57 +88,166 @@ export default async function(configuration) {
    * Chrome monopoly leading to bad outcomes, this is one. And no one in
    * particular is at fault of course.
    */
+  async function reap_into_inner_text(proc) {
+    const [stdin, stdout, stderr] = proc.configuration.fds;
+    proc.element.innerText = new TextDecoder().decode(stdout.file.data);
+    proc.element.title = new TextDecoder().decode(stderr.file.data);
+  }
+
   console.log('Reached stage3 successfully', configuration);
   const wasm = configuration.wasm_module;
 
   let newWasi = new configuration.WASI(configuration.args, configuration.env, configuration.fds);
   document.__wah_wasi_imports = newWasi.wasiImport;
 
-  let testmodule = Object.keys(document.__wah_wasi_imports)
-    .map((name, _) => `export const ${name} = document.__wah_wasi_imports.${name};`)
-    .join('\n');
-  let wasi_blob = new Blob([testmodule], { type: 'application/javascript' });
-  let objecturl = URL.createObjectURL(wasi_blob);
+  const kernel_bindings = WebAssembly.Module.customSections(wasm, 'wah_polyglot_wasm_bindgen');
 
-  const bindgens = WebAssembly.Module.customSections(wasm, 'wah_polyglot_wasm_bindgen');
-  const wbg_source = new TextDecoder().decode(bindgens[0]).replace('wasi_snapshot_preview1', objecturl);
+  // A kernel module is any Module which exposes a default export.that conforms
+  // to our call interface. It will get passed a promise to the wasmblob
+  // response of its process image and should be an awaitable that resolves to
+  // the exports from the module. Simplistically this could be the `exports`
+  // attribute from the `Instance` itself.
+  let kernel_module = undefined;
+  if (kernel_bindings.length > 0) {
+    // Create a module that the kernel can `import` via ECMA semantics. This
+    // enables such kernel modules to be independent from our target. In fact,
+    // we do expect them to be created via Rust's `wasm-bindgen` for instance.
+    let testmodule = Object.keys(document.__wah_wasi_imports)
+      .map((name, _) => `export const ${name} = document.__wah_wasi_imports.${name};`)
+      .join('\n');
+    let wasi_blob = new Blob([testmodule], { type: 'application/javascript' });
+    let objecturl = URL.createObjectURL(wasi_blob);
 
-  let wbg_blob = new Blob([wbg_source], { type: 'application/javascript' });
-  let wbg_url = URL.createObjectURL(wbg_blob);
-  const m = await import(wbg_url);
+    // FIXME: should be an import map where `wasi_snapshot_preview1` is an
+    // alias for our just created object URL module.
+    const wbg_source = new TextDecoder().decode(kernel_bindings[0])
+      .replace('wasi_snapshot_preview1', objecturl);
+
+    let wbg_blob = new Blob([wbg_source], { type: 'application/javascript' });
+    let wbg_url = URL.createObjectURL(wbg_blob);
+    kernel_module = await import(wbg_url);
+  }
 
   const index_html = WebAssembly.Module.customSections(wasm, 'wah_polyglot_stage1_html');
-  document.documentElement.innerHTML = (new TextDecoder().decode(index_html[0]));
+  if (index_html.length > 0) {
+    document.documentElement.innerHTML = (new TextDecoder().decode(index_html[0]));
+  }
 
   const rootdir = configuration.fds[3];
-  configuration.fds[0] = rootdir.path_open(0, "proc/0/fd/0", 0).fd_obj;
-  configuration.fds[1] = rootdir.path_open(0, "proc/0/fd/1", 0).fd_obj;
-  configuration.fds[2] = rootdir.path_open(0, "proc/0/fd/2", 0).fd_obj;
+  configuration.fds[0] = rootdir.path_open(0, "proc/0/fd/0", 0, 1).fd_obj;
+  configuration.fds[1] = rootdir.path_open(0, "proc/0/fd/1", 0, 1).fd_obj;
+  configuration.fds[2] = rootdir.path_open(0, "proc/0/fd/2", 0, 1).fd_obj;
   configuration.args.length = 0;
-  configuration.args.push("scene-viewer");
-  configuration.args.push("default-scene/scene.gltf");
-  configuration.env.push("RUST_BACKTRACE=full");
+
+  const input_decoder = new TextDecoder('utf-8');
+  const assign_arguments = (path, push_with, cname) => {
+    cname = cname || 'cmdline';
+    let cmdline = undefined;
+    if (cmdline = rootdir.path_open(0, path, 0, 1).fd_obj) {
+      let data = cmdline.file.data;
+      let nul_split = -1;
+      while ((nul_split = data.indexOf(0)) >= 0) {
+        const arg = data.subarray(0, nul_split);
+        push_with(input_decoder.decode(arg));
+        data = data.subarray(nul_split + 1);
+      }
+
+      push_with(input_decoder.decode(data));
+    } else {
+      console.log('No initial', cname);
+    }
+  }
+
+  assign_arguments("proc/0/cmdline", (e) => configuration.args.push(e), "cmdline");
+  assign_arguments("proc/0/environ", (e) => configuration.env.push(e), "environ");
+
+  let reaper = [];
 
   try {
-    console.log('start', configuration);
+    console.log('Dispatch stage3 into init', configuration);
+    var wasi_imports = { 'wasi_snapshot_preview1': newWasi.wasiImport };
+
+    // FIXME: hardcoded, should be configurable. Also if we launch multiple
+    // process instances concurrently then they are configured by finding a
+    // number of `<template>` elements that contain instructions for a
+    // derived configuration in that shared environment. Then the context is
+    // that element itself, allowing it to be replaced with the actual
+    // rendering intent.
+    var element = document.getElementById('wasi-document-init')
+      || document.getElementsByTagName('body')[0];
+    console.log('Using init element', element);
+
+    // The init process controls the whole body in the end.
+    reaper.push({
+      configuration: configuration,
+      // FIXME: hardcoded but permissible?
+      post_module: reap_into_inner_text,
+      // FIXME: hardcoded, should be configurable
+      override_file: 'proc/0/display.mjs',
+      // The element context.
+      //
+      // FIXME: replacement should also be possible early if we want to avoid
+      // flicker. That is before this stops running. A balanced approach may be
+      // enabled by WASI 0.2's component model where we have `async` / stream
+      // functions. That is functions that yield to the host multiple times
+      // before setting a result.
+      element: element,
+      imports: wasi_imports,
+    });
 
     var source_headers = {};
-    const wasmblob = new Blob([configuration.wasm], { type: 'application/wasm' });
-    const ret = await m.default(Promise.resolve(new Response(wasmblob, {
-      'headers': source_headers,
-    })));
+    var wasi_exports = undefined;
 
-    await newWasi.start({ 'exports': ret });
-    console.log('done');
+    if (kernel_module !== undefined) {
+      const wasmblob = new Blob([configuration.wasm], { type: 'application/wasm' });
+      wasi_exports = await kernel_module.default(Promise.resolve(new Response(wasmblob, {
+        'headers': source_headers,
+      })));
+
+      await newWasi.start({ 'exports': wasi_exports });
+    } else {
+      const instance = await WebAssembly.instantiate(wasm, wasi_imports);
+      wasi_exports = instance.exports;
+      await newWasi.start({ 'exports': wasi_exports });
+    }
   } catch (e) {
-    console.log(e);
-    console.log('at ', e.fileName, e.lineNumber, e.columnNumber);
-    console.log(e.stack);
+    if (typeof(e) == 'string' && e == 'exit with exit code 0') {} else {
+      console.dir(typeof(e), e);
+      console.log('at ', e.fileName, e.lineNumber, e.columnNumber);
+      console.log(e.stack);
+      configuration.fallback_shell(configuration, e);
+    }
   } finally {
     const [stdin, stdout, stderr] = configuration.fds;
     console.log('Result(stdin )', new TextDecoder().decode(stdin.file.data));
     console.log('Result(stdout)', new TextDecoder().decode(stdout.file.data));
     console.log('Result(stderr)', new TextDecoder().decode(stderr.file.data));
+  }
+
+  let display = await Promise.allSettled(reaper.map(async function(proc) {
+    const override_file = proc.configuration.fds[3]
+      ?.path_open(0, proc.override_file, 0, 0)
+      ?.fd_obj;
+
+    let post_handler = proc.post_module;
+
+    if (override_file) {
+      let blob = new Blob([override_file.file.data.buffer], { type: 'application/javascript' });
+      let blobURL = URL.createObjectURL(blob);
+      post_handler = (await import(blobURL)).default;
+    }
+
+    // FIXME: unclean. We expose all our WASI internals here. The exact classes
+    // etc. While this may sometimes be necessary for precise control and the
+    // layer is, after all, below us and thus our 'target platform' it would be
+    // much nicer if we had a more fine-grained decision about the exposed
+    // object where everything / most is opt-in and explicitly requested.
+    return await post_handler(new ProcessSettled(proc.configuration, proc.imports, proc.element));
+  }));
+
+  let have_an_error = undefined;
+  if ((have_an_error = display.filter(el => el.reason !== undefined)).length > 0) {
+    configuration.fallback_shell(configuration, have_an_error);
   }
 }
 
