@@ -20,7 +20,7 @@ async function init(bytes, wasm, wasi_root_fs) {
        function can take a Promise to a Response object that resolves to the WASM module.
        Since we have it already we just create a synthetic response.
    **/
-  let blob = new Blob([stage2[0]], { type: 'application/javascript' });
+  let blob = new Blob([stage2[0]], { type: 'text/javascript' });
   let blobURL = URL.createObjectURL(blob);
   let stage2_module = (await import(blobURL));
 
@@ -30,6 +30,7 @@ async function init(bytes, wasm, wasi_root_fs) {
   stage2_module.default({
     module_or_path: Promise.resolve(new Response(wasmblob)),
     wasi_root_fs: wasi_root_fs,
+    wasi_stage_url: blobURL,
   });
 }
 
