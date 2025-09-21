@@ -1,29 +1,10 @@
 [package]
-name = "wasm-as-html"
+name = "wasi-document"
 version = "0.0.0"
-edition = "2021"
-rust-version = "1.82"
+edition = "2024"
 
 [dependencies]
-wasm-encoder = "0.20"
-wasmparser = "0.95"
-[dependencies.clap]
-version = "4"
-features = ["derive"]
-[dependencies.base64]
-version = "0.21.4"
-default-features = false
-features = ["alloc"]
-[dependencies.lithtml]
-version = "0.7.0"
-optional = true
-[dependencies.html_and_tar]
-workspace = true
-[dependencies.walkdir]
-version = "2.5"
-[dependencies.zip]
-version = "2"
-
-[features]
-default = ["target-html+tar"]
-"target-html+tar" = ["dep:lithtml"]
+base64.workspace = true
+clap.workspace = true
+lithtml.workspace = true
+html_and_tar.workspace = true

@@ -1,0 +1,23 @@
+[package]
+name = "wasm-polywrap"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.82"
+
+[dependencies]
+wasm-encoder = "0.20"
+wasmparser = "0.95"
+
+base64.workspace = true
+clap.workspace = true
+lithtml = { workspace = true, optional = true }
+[dependencies.html_and_tar]
+workspace = true
+[dependencies.walkdir]
+version = "2.5"
+[dependencies.zip]
+version = "2"
+
+[features]
+default = ["target-html+tar"]
+"target-html+tar" = ["dep:lithtml"]

@@ -2,6 +2,7 @@
 members = [
   ".",
   "lib/html_and_tar",
+  "bin/polywrap",
   "bin/wasi-document",
   "stage2-loader/interpret",
   "stage3-kernel/unzip",
@@ -14,11 +15,21 @@ exclude = [
 	"examples/fidget/fidget",
 ]
 
-default-members = ["bin/wasi-document"]
+default-members = ["bin/polywrap"]
 resolver = "2"
 
 [workspace.dependencies]
 html_and_tar = { path = "lib/html_and_tar" }
+
+[workspace.dependencies.clap]
+version = "4"
+features = ["derive"]
+[workspace.dependencies.base64]
+version = "0.21.4"
+default-features = false
+features = ["alloc"]
+[workspace.dependencies.lithtml]
+version = "0.7.0"
 
 [profile.release]
 opt-level = 's'
