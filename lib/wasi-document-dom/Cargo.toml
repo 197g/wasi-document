@@ -1,0 +1,7 @@
+[package]
+name = "wasi-document-dom"
+version = "0.0.0"
+edition = "2024"
+
+[dependencies]
+lithtml.workspace = true

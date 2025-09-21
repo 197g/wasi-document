@@ -7,7 +7,7 @@ members = [
   "stage2-loader/interpret",
   "stage3-kernel/unzip",
   # Application for stage3/unzip
-  "examples/wasi/plotters-normal-2d",
+  "examples/wasi/plotters-normal-2d", "lib/wasi-document-dom",
 ]
 
 exclude = [
@@ -20,6 +20,7 @@ resolver = "2"
 
 [workspace.dependencies]
 html_and_tar = { path = "lib/html_and_tar" }
+wasi-document-dom = { path = "lib/wasi-document-dom" }
 
 [workspace.dependencies.clap]
 version = "4"

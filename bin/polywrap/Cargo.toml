@@ -10,7 +10,8 @@ wasmparser = "0.95"
 
 base64.workspace = true
 clap.workspace = true
-lithtml = { workspace = true, optional = true }
+wasi-document-dom = { workspace = true, optional = true }
+
 [dependencies.html_and_tar]
 workspace = true
 [dependencies.walkdir]
@@ -20,4 +21,4 @@ version = "2"
 
 [features]
 default = ["target-html+tar"]
-"target-html+tar" = ["dep:lithtml"]
+"target-html+tar" = ["dep:wasi-document-dom"]

@@ -1081,6 +1081,16 @@ dependencies = [
  "base64",
  "clap",
  "html_and_tar",
+ "walkdir",
+ "wasi-document-dom",
+ "wasm-encoder",
+ "wasmparser",
+]
+
+[[package]]
+name = "wasi-document-dom"
+version = "0.0.0"
+dependencies = [
  "lithtml",
 ]
 
@@ -1163,8 +1173,8 @@ dependencies = [
  "base64",
  "clap",
  "html_and_tar",
- "lithtml",
  "walkdir",
+ "wasi-document-dom",
  "wasm-encoder",
  "wasmparser",
  "zip 2.2.2",
