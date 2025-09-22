@@ -15,11 +15,13 @@ exclude = [
 	"examples/fidget/fidget",
 ]
 
-default-members = ["bin/polywrap"]
+default-members = ["bin/wasi-document"]
 resolver = "2"
 
 [workspace.dependencies]
 html_and_tar = { path = "lib/html_and_tar" }
+serde = {version = "1", features = ["derive"] }
+toml = "0.9"
 wasi-document-dom = { path = "lib/wasi-document-dom" }
 
 [workspace.dependencies.clap]

@@ -1,9 +1,10 @@
 [package]
-name = "unzip"
+name = "wasi-document-unzip"
 version = "0.1.0"
 edition = "2021"
 
 [[bin]]
+path = "src/main.rs"
 name = "unzip"
 # crate-type = ["cdylib"]
 

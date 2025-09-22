@@ -1,14 +1,23 @@
+mod build;
+mod project;
+
 use std::{io::Read as _, io::Write as _, path::PathBuf};
 
 use clap::Parser;
 use wasi_document_dom as dom;
+
+use project::Configuration;
 
 // FIXME: Rethink this as a project setup, i.e. like a `Cargo.toml` file where we can also describe
 // the nature of the machine so that this chooses the stage1, stage2, and other parameters for us.
 #[derive(Parser)]
 struct Args {
     // Options.
-    /// A file to write the module to, default stdout.
+    /// The path of the configuration file.
+    #[arg(long)]
+    project: Option<PathBuf>,
+
+    /// A file to write the module to, default to a target folder.
     #[arg(short, long)]
     out: Option<PathBuf>,
 }
@@ -16,6 +25,7 @@ struct Args {
 struct Work {
     index_html: PathBuf,
     stage2: Vec<u8>,
+    kernel: Vec<u8>,
     edit: bool,
     root_fs: Option<PathBuf>,
     out: Option<PathBuf>,
@@ -23,12 +33,14 @@ struct Work {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
-    something(&Work { ..todo!() })
+    let project = project::Configuration::load(&args)?;
+    let project = build::generate(&project)?;
+    merge_wasm(&project)
 }
 
-fn something(args: &Work) -> Result<(), Box<dyn std::error::Error>> {
-    let source = std::fs::read_to_string(&args.index_html)?;
-    let binary_wasm = finalize_wasm(&[], &args.stage2, args)?;
+fn merge_wasm(project: &Work) -> Result<(), Box<dyn std::error::Error>> {
+    let source = std::fs::read_to_string(&project.index_html)?;
+    let binary_wasm = finalize_wasm(&project.kernel, &project.stage2, project)?;
 
     let mut source = dom::SourceDocument::new(&source);
     let source_script = include_bytes!("stage0-html_plus_tar.js");
@@ -60,7 +72,7 @@ fn something(args: &Work) -> Result<(), Box<dyn std::error::Error>> {
         data: &binary_wasm,
     }));
 
-    if let Some(root) = &args.root_fs {
+    if let Some(root) = &project.root_fs {
         let iter = walkdir::WalkDir::new(root).same_file_system(true);
 
         for entry in iter {
@@ -112,7 +124,7 @@ fn something(args: &Work) -> Result<(), Box<dyn std::error::Error>> {
 
     let wasm = seq_of_bytes.join(&b""[..]);
 
-    match &args.out {
+    match &project.out {
         None => {
             let mut stdout = std::io::stdout();
             stdout.write_all(&wasm)?;

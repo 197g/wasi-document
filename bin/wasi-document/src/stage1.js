@@ -4,7 +4,10 @@ async function init(bytes, wasm, wasi_root_fs) {
   if (index_html.length) {
     document.documentElement.innerHTML = (new TextDecoder().decode(index_html[0]));
   } else {
-    document.getElementById('stage0_error').innerText = '';
+    const error = document.getElementById('stage0_error');
+    if (error) {
+      error.innerText = '';
+    }
   }
 
   let stage2 = WebAssembly.Module.customSections(wasm, 'wah_polyglot_stage2');
