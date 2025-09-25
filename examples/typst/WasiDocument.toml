@@ -1,5 +1,6 @@
 [Document]
 index-html = "index.html"
+init = "bin/typst.wasm"
 root = "root"
 
 [Machine]

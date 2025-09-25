@@ -314,7 +314,7 @@ export default async function(configuration) {
       { 'by-tag-name': 'body'},
     ]);
 
-    console.log('Using init element', element);
+    console.log('Using init element', element, configuration);
 
     // The init process controls the whole body in the end.
     reaper.push({

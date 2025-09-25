@@ -1,7 +1,7 @@
 mod build;
 mod project;
 
-use std::{io::Read as _, io::Write as _, path::PathBuf};
+use std::{io::Write as _, path::PathBuf};
 
 use clap::Parser;
 use wasi_document_dom as dom;
@@ -26,6 +26,8 @@ struct Work {
     index_html: PathBuf,
     stage2: Vec<u8>,
     kernel: Vec<u8>,
+    /// The "user-space" init process to use.
+    init: Vec<u8>,
     edit: bool,
     root_fs: Option<PathBuf>,
     out: Option<PathBuf>,
@@ -40,7 +42,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn merge_wasm(project: &Work) -> Result<(), Box<dyn std::error::Error>> {
     let source = std::fs::read_to_string(&project.index_html)?;
-    let binary_wasm = finalize_wasm(&project.kernel, &project.stage2, project)?;
+    let binary_wasm = finalize_wasm(&project.init, &project.stage2, project)?;
 
     let mut source = dom::SourceDocument::new(&source);
     let source_script = include_bytes!("stage0-html_plus_tar.js");
@@ -68,6 +70,11 @@ fn merge_wasm(project: &Work) -> Result<(), Box<dyn std::error::Error>> {
     let mut pushed_data = vec![];
 
     pushed_data.push(engine.escaped_insert_base64(html_and_tar::Entry {
+        name: "boot/init",
+        data: &project.kernel,
+    }));
+
+    pushed_data.push(engine.escaped_continue_base64(html_and_tar::Entry {
         name: "boot/wah-init.wasm",
         data: &binary_wasm,
     }));

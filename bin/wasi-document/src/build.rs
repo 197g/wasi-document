@@ -25,6 +25,7 @@ pub fn generate(
 
     Ok(super::Work {
         index_html: configuration.document.index_html.clone(),
+        init: std::fs::read(&configuration.document.init)?,
         stage2: stage2.item,
         kernel: stage3.item,
         edit: false,

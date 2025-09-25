@@ -84,7 +84,7 @@ async function mount({ module_or_path, wasi_root_fs, wasi_stage_url }) {
     } else if (event.data['element-select']) {
       const {ed, selectors} = event.data['element-select'];
 
-      var element = undefined;
+      var element = null;
       for (var selector of selectors) {
         if (selector['by-id']) {
           element = document.getElementById(selector['by-id']);
@@ -100,7 +100,8 @@ async function mount({ module_or_path, wasi_root_fs, wasi_stage_url }) {
           }
         }
 
-        if (element !== undefined) {
+        if (element !== null) {
+          console.log('Matched ', selector, element);
           break;
         }
       }
@@ -120,6 +121,7 @@ async function mount({ module_or_path, wasi_root_fs, wasi_stage_url }) {
       }
     } else if (event.data['element-insert']) {
       const {ed, innerHTML} = event.data['element-insert'];
+      console.log(ed, worker_state.elements.get(ed));
       worker_state.elements.get(ed).innerHTML = innerHTML;
     } else if (event.data['element-replace']) {
       const {ed, outerHTML} = event.data['element-replace'];
@@ -390,7 +392,6 @@ async function worker_mount({
   }
 
   configuration.wasi = new WASI(args, env, fds);
-  // The primary is setup as the executable image of proc/0/exe (initially the stage4).
   const boot_exe = filesystem.path_open(0, "boot/init", 0).fd_obj;
 
   // FIXME: error handling?
