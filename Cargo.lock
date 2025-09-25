@@ -480,9 +480,9 @@ checksum = "f051f77a7c8e6957c0696eac88f26b0117e54f52d3fc682ab19397a8812846a4"
 
 [[package]]
 name = "lithtml"
-version = "0.7.0"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "93f17a40119ad2ec6b8e2669e8c507c9173347951daa8b65eebf12b024c12076"
+checksum = "b0545fdd6b6b0e54d6b08d409a8b2786a0200f87ba2252a26afac7995f7cb5a1"
 dependencies = [
  "pest",
  "pest_derive",

@@ -5,7 +5,7 @@ members = [
   "bin/polywrap",
   "bin/wasi-document",
   "stage2-loader/interpret",
-  "stage3-kernel/unzip",
+  "stage3-kernel/proc",
   # Application for stage3/unzip
   "examples/wasi/plotters-normal-2d", "lib/wasi-document-dom",
 ]
@@ -32,7 +32,7 @@ version = "0.21.4"
 default-features = false
 features = ["alloc"]
 [workspace.dependencies.lithtml]
-version = "0.7.0"
+version = "0.8.0"
 
 [profile.release]
 opt-level = 's'
