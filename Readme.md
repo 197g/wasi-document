@@ -37,19 +37,27 @@ The file contents for the zip archive and bootstrapping are interpolated into
 the HTML when choosing the `html+tar` target. However, due to compatibility
 issues and concerns this can not happen verbatim as bytes. We prioritize the
 ability to preserve the original file structure and the majority of its
-execution model. Instead, the contents are encoded firstly as base64 and
-secondly with additional special entries with empty filenames.
+execution model.
 
-The standard `tar` implementation will skip files by complaining loudly. To get
-an overview of the contained files with your standard system tools we
-recommend:
+- The inline contents of files are encoded as base64.
+- We encode additional data with pax header entries (typeflag='x'). Previously,
+  these were also contained in files with empty filenames. The pax header data
+  itself may be significant. As a main hack, the HTML is assumed UTF8 and its
+  own start is a marked as comment in such a header.
+- We encode external references as sparse files (typeflag='S'). The linkname
+  contains the parent URL where to fetch them.
+
+The file contents are compatible with POSIX:2004 `pax` (GNU tar tries to
+implement this) as well as HTML. To get an overview of the contained files with
+your standard system tools we recommend:
 
 ```bash
-tar xf $your_archive_file.html --exclude='' --to-command='base64 -d | file -'
+tar xf $your_archive_file.html --to-command='echo -n "$TAR_REALNAME: "; base64 -d | file -b -'
 ```
 
 You may want to modify this as a template for similar interactions with the
-contained data.
+contained data. See `man tar` on `--to-command` for some more environment
+variables.
 
 ## Why this specifically, or reasons against PDF
 
@@ -157,7 +165,7 @@ For HTML:
     - The stage2-wasi will now transfer control over to WASI as the main
       driver. It begins by invoking another intermediate stage program to
       control the setup of the WASI system, similar to Unix `init`.
-      See [stage2](wasi-loader/Readme.md) for more.
+      See [stage2](stage2-loader/Readme.md) for more.
 - The default stage3 will now inspect and process the bundled zip data. This
   module takes the role of bootloader for the original module. The zip-file
   will be treated similar to an initial disk. The astute reader might instead

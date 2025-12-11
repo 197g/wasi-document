@@ -41,6 +41,15 @@ pub struct Entry<'la> {
     pub data: &'la [u8],
 }
 
+pub struct Sparse<'la> {
+    /// An ascii name for this file.
+    pub name: &'la str,
+    /// The real byte length of the file.
+    pub realsize: u64,
+    /// Where we store this data in actuality.
+    pub reference: &'la str,
+}
+
 pub struct InitialEscape {
     /// What Tar header describes the start of the HTML?
     pub header: TarHeader,
@@ -79,21 +88,26 @@ impl TarEngine {
         let mut this = TarHeader::EMPTY;
         this.name[1..][..all_except_close].copy_from_slice(&html_head[..all_except_close]);
         this.name[1..][all_except_close..][..6].copy_from_slice(b" __A=\"");
-        this.prefix[153..].copy_from_slice(b"\">");
-        this.typeflag = b'0';
+        this.typeflag = b'x';
 
         let tail_len = entry_offset.checked_sub(consumed).unwrap();
-        this.assign_size(tail_len);
-        this.assign_standards();
+        // As payload of this extra header, we mark the HTML content as a comment and also close
+        // off the tag itself. Technically, a newline is required but really we only care about not
+        // having the data interpreted. So having the decompression think it is truncated is fine.
+        let extra = format!("{:010} comment=\">", 11 + tail_len);
+
+        this.assign_size(extra.len() + tail_len);
+        this.assign_permission_encoding_meta();
         this.assign_checksum();
 
         self.len += core::mem::size_of::<TarHeader>() as u64;
+        self.len += extra.len() as u64;
         self.len += tail_len as u64;
 
         InitialEscape {
             header: this,
             // extra refers to all the data we are adding. Which isn't anything yet.
-            extra: vec![],
+            extra: extra.into_bytes(),
             consumed,
         }
     }
@@ -123,9 +137,16 @@ impl TarEngine {
 
         let mut this = TarHeader::EMPTY;
         this.name[..START.len()].copy_from_slice(START);
+        this.typeflag = b'x';
         this.assign_size(0);
-        this.assign_standards();
+        this.assign_permission_encoding_meta();
         let end_start = this.prefix.len() - ID.len();
+        // FIXME: if we add data into this extended header, we must have real control over that
+        // data ensuring it is safe as an HTML attribute—so no quotation marks despite the
+        // theoretical arbitrary UTF-8 capabilities. Also we should in this case *not* encode the
+        // `_wahtml_id` attribute into the prefix but instead a replacement attribute which we then
+        // close off and re-open as `_wahtml_id` at the end of the extended header data (probably
+        // smuggling it within a pax `comment` value).
         this.prefix[end_start..].copy_from_slice(ID);
         this.assign_checksum();
         self.len += core::mem::size_of::<TarHeader>() as u64;
@@ -135,6 +156,7 @@ impl TarEngine {
         file.name[..qualname.len()].copy_from_slice(qualname.as_bytes());
         file.name[qualname.len()..][1..][..CONT.len()].copy_from_slice(CONT);
         file.assign_size(data.len());
+        file.assign_permission_encoding_meta();
         file.prefix[end_start..].copy_from_slice(DATA_START);
         file.assign_checksum();
         self.len += core::mem::size_of::<TarHeader>() as u64;
@@ -152,9 +174,40 @@ impl TarEngine {
 
     pub fn escaped_continue_base64(&mut self, Entry { name, data }: Entry) -> EscapedData {
         let qualname = Self::qualify_name_for_html_attribute(name);
-
-        let padding = self.pad_to_fit();
         let data = STANDARD.encode(data).into_bytes();
+
+        self.continue_qualified(qualname, data, |_, _| {})
+    }
+
+    pub fn escaped_continue_sparse(
+        &mut self,
+        Sparse {
+            name,
+            realsize,
+            reference,
+        }: Sparse,
+    ) -> EscapedData {
+        let qualname = Self::qualify_name_for_html_attribute(name);
+        let qualref = Self::qualify_name_for_html_attribute(reference);
+
+        self.continue_qualified(qualname, Vec::new(), |_, file| {
+            let realsize_off = 452 - 345;
+
+            file.linkname[1..][..qualref.len()].copy_from_slice(qualref.as_bytes());
+            file.typeflag = b'S';
+            file.prefix[realsize_off..][..11]
+                .copy_from_slice(format!("{realsize:011o}").as_bytes());
+            // file.__padding[8..].copy_from_slice(b"tar\0");
+        })
+    }
+
+    fn continue_qualified(
+        &mut self,
+        qualname: &str,
+        data: Vec<u8>,
+        hook: impl FnOnce(&mut TarHeader, &mut TarHeader),
+    ) -> EscapedData {
+        let padding = self.pad_to_fit();
 
         const START: &[u8] = b"\0</template><template class=\"wah_polyglot_data\" __A=\"";
         const DATA_START: &[u8] = b"\">";
@@ -163,19 +216,24 @@ impl TarEngine {
 
         let mut this = TarHeader::EMPTY;
         this.name[..START.len()].copy_from_slice(START);
+        this.typeflag = b'x';
         this.assign_size(0);
-        this.assign_standards();
+        this.assign_permission_encoding_meta();
         let end_start = this.prefix.len() - ID.len();
         this.prefix[end_start..].copy_from_slice(ID);
-        this.assign_checksum();
         self.len += core::mem::size_of::<TarHeader>() as u64;
 
         let mut file = TarHeader::EMPTY;
         let end_start = file.prefix.len() - DATA_START.len();
         file.name[..qualname.len()].copy_from_slice(qualname.as_bytes());
         file.name[qualname.len()..][1..][..CONT.len()].copy_from_slice(CONT);
+        file.assign_permission_encoding_meta();
         file.assign_size(data.len());
         file.prefix[end_start..].copy_from_slice(DATA_START);
+
+        hook(&mut this, &mut file);
+
+        this.assign_checksum();
         file.assign_checksum();
         self.len += core::mem::size_of::<TarHeader>() as u64;
 
@@ -201,7 +259,7 @@ impl TarEngine {
         this.name[..START.len()].copy_from_slice(START);
         this.assign_size(skip);
         this.prefix[155 - END.len()..].copy_from_slice(END);
-        this.assign_standards();
+        this.assign_permission_encoding_meta();
         this.assign_checksum();
 
         EscapedSentinel {
@@ -243,13 +301,16 @@ impl TarHeader {
         bytemuck::bytes_of(self)
     }
 
-    pub fn assign_standards(&mut self) {
+    pub fn assign_permission_encoding_meta(&mut self) {
         self.mode.copy_from_slice(b"0000644\0");
-        self.uid.copy_from_slice(b"0001750\0");
-        self.gid.copy_from_slice(b"0001750\0");
+        // The usual id for nobody, 65534, in octal is 177776
+        self.uid.copy_from_slice(b"0177776\0");
+        self.gid.copy_from_slice(b"0177776\0");
+        // FIXME: well the project began here.
         self.mtime.copy_from_slice(b"14707041774\0");
-        self.magic = *b"ustar ";
-        self.version = *b" \0";
+        // Use standard star header, this is _not_ an old style GNU header.
+        self.magic = *b"ustar\0";
+        self.version = *b"  ";
         self.uname[..7].copy_from_slice(b"nobody\0");
         self.gname[..7].copy_from_slice(b"nobody\0");
     }

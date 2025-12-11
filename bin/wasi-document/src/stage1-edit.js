@@ -1,4 +1,4 @@
-async function init(bytes, wasm, wasi_root_fs) {
+async function init(bytes, wasm, initial) {
   let index_html = WebAssembly.Module.customSections(wasm, 'wah_polyglot_stage1_html');
 
   if (index_html.length) {
@@ -26,11 +26,37 @@ async function init(bytes, wasm, wasi_root_fs) {
 
   /** wasm-bindgen: creates one 
   */
-  let wasmblob = new Blob([bytes], { type: 'application/wasm' });
-  stage2_module.default({
-    module_or_path: Promise.resolve(new Response(wasmblob)),
-    wasi_root_fs: wasi_root_fs,
-  });
+  function with_bytes(bytes) {
+    let wasmblob = new Blob([bytes], { type: 'application/wasm' });
+    stage2_module.default(Promise.resolve(new Response(wasmblob)));
+  }
+
+  with_bytes(bytes);
+  refetch(bytes, with_bytes, 1000);
+}
+
+async function refetch(bytes, onchange, interval) {
+  async function identify(data) {
+    let hashBuffer = await crypto.subtle.digest('SHA-256', data);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
+  };
+
+  let curHash = await identify(bytes);
+
+  setInterval(async function() {
+    let doc = await fetch(window.location.href);
+    let bytes = await doc.arrayBuffer();
+    let newHash = await identify(bytes);
+
+    if (newHash == curHash) {
+      return;
+    }
+
+    console.log('Tiggering reload', newHash, curHash, bytes);
+    curHash = newHash;
+    onchange(bytes);
+  }, interval || 30);
 }
 
 export default init;

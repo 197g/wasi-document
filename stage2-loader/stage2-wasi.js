@@ -4,6 +4,7 @@ import { load_config } from 'wasi-config:config.toml'
 
 async function fallback_shell(configuration, error) {
   document.documentElement.innerHTML = `<p>Missing boot exec</p>`;
+
   if (error !== undefined) {
     document.documentElement.innerHTML = `<p>Error: ${error}</p>`;
   }
@@ -38,14 +39,144 @@ async function fallback_shell(configuration, error) {
     return list;
   };
 
-  document.documentElement.innerHTML += `<p>Filesystem: </p>`;
-  document.documentElement.appendChild(mkDirElement(rootfs.dir));
+  if (rootfs) {
+    document.documentElement.innerHTML += `<p>Filesystem: </p>`;
+    document.documentElement.appendChild(mkDirElement(rootfs.dir));
+  }
 
   console.log(error);
 }
 
-async function mount({ module_or_path, wasi_root_fs }) {
-  const response = await module_or_path;
+async function mount({ module_or_path, wasi_root_fs, wasi_stage_url }) {
+  const wasmbody = await (await module_or_path).arrayBuffer();
+
+  // Absurdly hacky way to construct our worker.js source code.
+  //
+  // Problem 1: If we use `type: module` in the worker definition then Chromium
+  //   blocks the worker based on the same-origin policy... Apparently a blob is
+  //   not a safe origin. Google-Centric technology idiots.
+  // Problem 2: We ourselves want to be a module for `import` working
+  //   consistently in our stage 1 system.
+  // Problem 3: Packing this package is the way we introduce all wasi_shim code
+  //   into our sources.
+  const module_src = await (await fetch(wasi_stage_url)).text();
+  let idx = module_src.search('\nexport ');
+  let modBlob = new Blob([module_src.slice(0, idx)], { type: 'text/javascript' });
+  let moduleURL = URL.createObjectURL(modBlob);
+
+  var worker = new Worker(moduleURL, { type: 'classic' });
+
+  var worker_state = {
+    elements: new Map(),
+  };
+
+  worker.onmessage = (event) => {
+    /** Important note on event handling: The client references some data
+     * through 'element-handles' which behave like file handles. However note
+     * that the client is responsible for allocating this handles. For the sake
+     * of reuse we must therefore synchronize the effects of element handle
+     * re-assigments with the order of events such that it corresponds to the
+     * client order. The rest of effects may be asynchronous.
+     */
+    if (event.data.error) {
+      const {configuration, error} = event.data.error;
+      fallback_shell(configuration, error)
+    } else if (event.data['element-select']) {
+      const {ed, selectors} = event.data['element-select'];
+
+      var element = null;
+      for (var selector of selectors) {
+        if (selector['by-id']) {
+          element = document.getElementById(selector['by-id']);
+        } else if (selector['by-class-name']) {
+          element = document.getElementsByClassName(selector['by-class-name']);
+          if (!selector.multi) {
+            element = element[0];
+          }
+        } else if (selector['by-tag-name']) {
+          element = document.getElementsByTagName(selector['by-tag-name']);
+          if (!selector.multi) {
+            element = element[0];
+          }
+        }
+
+        if (element !== null) {
+          console.log('Matched ', selector, element);
+          break;
+        }
+      }
+
+      console.log('Opening element descriptor', ed, element);
+      worker_state.elements.set(ed, element);
+    } else if (event.data['element-exec']) {
+      const {ed, fn, args, ret} = event.data['element-exec'];
+      const fn_js = (new Function('return '+fn))();
+
+      const element = worker_state.elements.get(ed);
+      let result = fn_js(element, ...args);
+
+      if (ret) {
+        console.log('Invoked result', ret, result);
+        worker.postMessage({ 'completed': { ed: ret, result: result } });
+      }
+    } else if (event.data['element-insert']) {
+      const {ed, innerHTML} = event.data['element-insert'];
+      console.log(ed, worker_state.elements.get(ed));
+      worker_state.elements.get(ed).innerHTML = innerHTML;
+    } else if (event.data['element-replace']) {
+      const {ed, outerHTML} = event.data['element-replace'];
+      worker_state.elements.get(ed).outerHTML = outerHTML;
+      worker_state.elements.delete(ed);
+    }
+  };
+
+  worker.postMessage({
+    start: {
+      wasi_root_fs: wasi_root_fs,
+      wasm_body: wasmbody,
+    }
+  }, [wasmbody])
+
+  console.log('Mounted and running async');
+}
+
+let worker_side_state = undefined;
+
+onmessage = (event) => {
+  console.log('worker received', event.data);
+  if (event.data.start) {
+    const { wasm_body, wasi_root_fs } = event.data.start;
+    let channel = new MessageChannel();
+
+    worker_side_state = {
+      proxy_port: channel.port1,
+    };
+
+    channel.port1.onmessage = (event) => {
+      const whatever = event.data;
+      console.log('worker sending', whatever);
+      self.postMessage(whatever, whatever.transfer || []);
+    };
+
+    worker_mount({
+      wasm_body: wasm_body,
+      wasi_root_fs: wasi_root_fs,
+      port: channel.port2,
+    })
+  } else if (event.data.completed) {
+    const {ed, result} = event.data.completed;
+    worker_side_state.proxy_port.postMessage({ completed: { ed, result }});
+  }
+}
+
+async function worker_mount({
+  wasm_body,
+  wasi_root_fs,
+  port,
+}) {
+  const wasmblob = new Blob([wasm_body], { type: 'application/wasm' });
+  const response = new Response(wasmblob);
+
   const [body_wasm, body_file] = response.body.tee();
 
   let wasm = await WebAssembly.compileStreaming(new Response(body_wasm, {
@@ -72,6 +203,17 @@ async function mount({ module_or_path, wasi_root_fs }) {
     fds: [],
     wasm: await body_to_array_buffer(response, body_file),
     wasm_module: wasm,
+  };
+
+  let trigger_fallback = (configuration, error) => {
+    port.postMessage({
+      error: {
+        configuration: {
+          fds: [null, null, null, null],
+        },
+        error,
+      }
+    });
   };
 
   let wah_wasi_config_data = WebAssembly.Module.customSections(wasm, 'wah_wasi_config');
@@ -197,8 +339,7 @@ async function mount({ module_or_path, wasi_root_fs }) {
     } catch (e) {
       console.log('Instructions failed', e);
       console.log(ops);
-      document.documentElement.textContent += '\nOops: ';
-      document.documentElement.textContent += '\nError: '+e;
+      trigger_fallback(configuration, e);
     }
 
     console.log(`Initialized towards stage3 in ${ops.length-256} steps`);
@@ -250,9 +391,7 @@ async function mount({ module_or_path, wasi_root_fs }) {
     }
   }
 
-
   configuration.wasi = new WASI(args, env, fds);
-  // The primary is setup as the executable image of proc/0/exe (initially the stage4).
   const boot_exe = filesystem.path_open(0, "boot/init", 0).fd_obj;
 
   // FIXME: error handling?
@@ -271,9 +410,8 @@ async function mount({ module_or_path, wasi_root_fs }) {
     try {
       configuration.wasi.start(inst);
     } catch (e) {
-      document.documentElement.innerHTML += `<p>Failed initialization: ${e}</p>`;
-      document.documentElement.innerHTML += `<p>Result(stdout) ${new TextDecoder().decode(stdout.file.data)}</p>`;
-      document.documentElement.innerHTML += `<p>Result(stderr) ${new TextDecoder().decode(stderr.file.data)}</p>`;
+      trigger_fallback(configuration, e);
+      return;
     }
   } finally {
     console.log('Result(stdin )', new TextDecoder().decode(stdin.file.data));
@@ -282,20 +420,23 @@ async function mount({ module_or_path, wasi_root_fs }) {
   }
 
   let module = filesystem.path_open(0, "boot/index.mjs", 0).fd_obj;
+
   if (module == null) {
-    return await fallback_shell(configuration);
+    return trigger_fallback(configuration);
   }
 
   let blob = new Blob([module.file.data.buffer], { type: 'application/javascript' });
   let blobURL = URL.createObjectURL(blob);
   let stage3_module = (await import(blobURL));
-  configuration.fallback_shell = fallback_shell;
 
+  configuration.fallback_shell = trigger_fallback;
+  configuration.port = port;
   console.log('executing boot module');
+
   try {
     await stage3_module.default(configuration);
   } catch (e) {
-    await fallback_shell(configuration, e);
+    trigger_fallback(configuration, e);
   }
 }
 

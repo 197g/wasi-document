@@ -1,0 +1,8 @@
+[Document]
+index-html = "index.html"
+init = "bin/typst.wasm"
+root = "root"
+
+[Machine]
+stage2 = { flavor = "node", workdir = "../../stage2-loader", build = "build.mjs" }
+stage3 = { flavor = "rust", package = "wasi-document-unzip", bin = "unzip" }

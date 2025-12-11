@@ -1,3 +1,132 @@
+class RemoteElement {
+  #elementFd;
+
+  constructor(element, remote) {
+    this.elementFd = element;
+    this.remote = remote;
+  }
+
+  insert(innerHTML) {
+    return this.remote.insert(this.elementFd, innerHTML);
+  }
+
+  replace(outerHTML) {
+    this.remote.replace(this.elementFd, outerHTML);
+    this._invalidate();
+  }
+
+  exec(fn_or_module, args, transfer) {
+    return this.remote.exec(this.elementFd, fn_or_module, args, transfer);
+  }
+
+  _invalidate() {
+    this.elementFd = 0;
+  }
+}
+
+class RemoteEditPort {
+  #elementFd;
+  #elementFree;
+  #port;
+  #awaits;
+
+  constructor(port) {
+    this.port = port;
+    this.elementFree = []
+    this.elementFd = 1;
+    this.awaits = new Map();
+
+    this.port.onmessage = (ev) => this._handle_results(ev);
+  }
+
+  select(selectors) {
+    const _nothing = JSON.stringify(selectors);
+    const ed = this._allocateEd();
+
+    this.port.postMessage({
+      'element-select': {
+        ed: ed,
+        selectors: selectors,
+      }
+    });
+
+    return ed;
+  }
+
+  insert(ed, innerHTML) {
+    this.port.postMessage({
+      'element-insert': {
+        ed: ed,
+        innerHTML: innerHTML,
+      }
+    });
+  }
+
+  replace(ed, outerHTML) {
+    this.port.postMessage({
+      'element-replace': {
+        ed: ed,
+        outerHTML: outerHTML,
+      }
+    });
+
+    this._deallocateEd(ed);
+  }
+
+  exec(ed, fn_or_module, args, transfer) {
+    if (!(fn_or_module instanceof String)) {
+      fn_or_module = fn_or_module.toString();
+    }
+
+    var ret = this._allocateEd();
+    var result = Promise.withResolvers();
+    result.promise.finally(() => this._deallocateEd(ret));
+
+    this.awaits.set(ret, new WeakRef(result));
+
+    this.port.postMessage({
+      'element-exec': {
+        ed: ed,
+        fn: fn_or_module,
+        args: args,
+        ret,
+      },
+      transfer: transfer,
+    });
+
+    return result;
+  }
+
+  _allocateEd() {
+    var ed;
+    if ((ed = this.elementFree.pop()) !== undefined) {
+      return ed;
+    }
+
+    ed = this.elementFd;
+    this.elementFd += 1;
+
+    // Reached Float precision.. That's 2**52 concurrent ed.
+    if (ed == this.elementFd) {
+      throw 'Out of unique element IDs';
+    }
+
+    return ed;
+  }
+
+  _deallocateEd(ed) {
+    this.elementFree.push(ed);
+  }
+
+  _handle_results(event) {
+    if (event.data.completed) {
+      const {ed, result} = event.data.completed;
+      this.awaits.get(ed)?.deref()?.resolve?.(result);
+      this.awaits.delete(ed);
+    }
+  }
+}
+
 class ProcessSettled {
   #configuration;
   #imports;
@@ -16,12 +145,20 @@ class ProcessSettled {
       ?.file.data.buffer;
   }
 
+  remote() {
+    return this.element.remote;
+  }
+
   insert(output) {
-    this.element.innerHTML = output;
+    this.element.insert(output);
   }
 
   replace(output) {
-    this.element.outerHTML = output;
+    this.element.replace(output);
+  }
+
+  exec(fn_or_module, args, transfer) {
+    this.element.exec(fn_or_module, args, transfer);
   }
 
   async dispatch({ executable, args, stdin, stdout, stderr, element }) {
@@ -56,6 +193,7 @@ class ProcessSettled {
       }
     }
 
+    var element = new RemoteElement(element, this.element.remote);
     return new ProcessSettled(newWasi, wasi_imports, element);
   }
 }
@@ -96,9 +234,9 @@ export default async function(configuration) {
 
   console.log('Reached stage3 successfully', configuration);
   const wasm = configuration.wasm_module;
+  const remote = new RemoteEditPort(configuration.port);
 
   let newWasi = new configuration.WASI(configuration.args, configuration.env, configuration.fds);
-  document.__wah_wasi_imports = newWasi.wasiImport;
 
   const kernel_bindings = WebAssembly.Module.customSections(wasm, 'wah_polyglot_wasm_bindgen');
 
@@ -108,7 +246,10 @@ export default async function(configuration) {
   // the exports from the module. Simplistically this could be the `exports`
   // attribute from the `Instance` itself.
   let kernel_module = undefined;
-  if (kernel_bindings.length > 0) {
+  if (kernel_bindings.length > 0 && false) {
+    // fIXME: no longer implemented under WebWorker sandbox. But the code is also not ready to target both environments transparently.
+    document.__wah_wasi_imports = newWasi.wasiImport;
+
     // Create a module that the kernel can `import` via ECMA semantics. This
     // enables such kernel modules to be independent from our target. In fact,
     // we do expect them to be created via Rust's `wasm-bindgen` for instance.
@@ -126,11 +267,6 @@ export default async function(configuration) {
     let wbg_blob = new Blob([wbg_source], { type: 'application/javascript' });
     let wbg_url = URL.createObjectURL(wbg_blob);
     kernel_module = await import(wbg_url);
-  }
-
-  const index_html = WebAssembly.Module.customSections(wasm, 'wah_polyglot_stage1_html');
-  if (index_html.length > 0) {
-    document.documentElement.innerHTML = (new TextDecoder().decode(index_html[0]));
   }
 
   const rootdir = configuration.fds[3];
@@ -173,9 +309,12 @@ export default async function(configuration) {
     // derived configuration in that shared environment. Then the context is
     // that element itself, allowing it to be replaced with the actual
     // rendering intent.
-    var element = document.getElementById('wasi-document-init')
-      || document.getElementsByTagName('body')[0];
-    console.log('Using init element', element);
+    var element = remote.select([
+      { 'by-id': 'wasi-document-init'},
+      { 'by-tag-name': 'body'},
+    ]);
+
+    console.log('Using init element', element, configuration);
 
     // The init process controls the whole body in the end.
     reaper.push({
@@ -242,31 +381,12 @@ export default async function(configuration) {
     // layer is, after all, below us and thus our 'target platform' it would be
     // much nicer if we had a more fine-grained decision about the exposed
     // object where everything / most is opt-in and explicitly requested.
-    return await post_handler(new ProcessSettled(proc.configuration, proc.imports, proc.element));
+    var element = new RemoteElement(proc.element, remote);
+    return await post_handler(new ProcessSettled(proc.configuration, proc.imports, element));
   }));
 
   let have_an_error = undefined;
   if ((have_an_error = display.filter(el => el.reason !== undefined)).length > 0) {
     configuration.fallback_shell(configuration, have_an_error);
   }
-}
-
-// The concept that did not work, importmap must not be modified/added from a script.
-function __not_working_via_importmap(objecturl) {
-  if (!(HTMLScriptElement.supports?.("importmap"))) {
-    throw "Browser must support import maps.";
-  }
-
-  const importmap = JSON.stringify({
-    "imports": {
-      "testing": objecturl,
-    },
-  });
-
-  const d = document.createElement('script');
-  d.type = 'importmap';
-  d.innerText = importmap;
-
-  document.documentElement.innerHTML = `<head></head>`;
-  document.head.appendChild(d);
 }

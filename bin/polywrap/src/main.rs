@@ -2,7 +2,7 @@ use std::{io::Read, io::Write, path::PathBuf};
 
 use clap::Parser;
 #[cfg(feature = "target-html+tar")]
-mod dom;
+use wasi_document_dom as dom;
 mod error;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
