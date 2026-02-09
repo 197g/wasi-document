@@ -1,9 +1,16 @@
+use core::ops::Range;
+
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 
 mod bytemuck {
     pub fn bytes_of(tar: &super::TarHeader) -> &[u8] {
         let len = core::mem::size_of_val(tar);
         unsafe { &*core::slice::from_raw_parts(tar as *const _ as *const u8, len) }
+    }
+
+    pub fn bytes_of_mut(tar: &mut super::TarHeader) -> &mut [u8] {
+        let len = core::mem::size_of_val(tar);
+        unsafe { &mut *core::slice::from_raw_parts_mut(tar as *mut _ as *mut u8, len) }
     }
 }
 
@@ -12,24 +19,29 @@ pub struct TarEngine {
     len: u64,
 }
 
+#[derive(Default)]
+pub struct TarDecompiler {
+    len: u64,
+}
+
 #[repr(C)]
 pub struct TarHeader {
-    name: [u8; 100],     /*   0 */
-    mode: [u8; 8],       /* 100 */
-    uid: [u8; 8],        /* 108 */
-    gid: [u8; 8],        /* 116 */
-    size: [u8; 12],      /* 124 */
-    mtime: [u8; 12],     /* 136 */
-    chksum: [u8; 8],     /* 148 */
-    typeflag: u8,        /* 156 */
-    linkname: [u8; 100], /* 157 */
-    magic: [u8; 6],      /* 257 */
-    version: [u8; 2],    /* 263 */
-    uname: [u8; 32],     /* 265 */
-    gname: [u8; 32],     /* 297 */
-    devmajor: [u8; 8],   /* 329 */
-    devminor: [u8; 8],   /* 337 */
-    prefix: [u8; 155],   /* 345 */
+    pub name: [u8; 100],     /*   0 */
+    pub mode: [u8; 8],       /* 100 */
+    pub uid: [u8; 8],        /* 108 */
+    pub gid: [u8; 8],        /* 116 */
+    pub size: [u8; 12],      /* 124 */
+    pub mtime: [u8; 12],     /* 136 */
+    pub chksum: [u8; 8],     /* 148 */
+    pub typeflag: u8,        /* 156 */
+    pub linkname: [u8; 100], /* 157 */
+    pub magic: [u8; 6],      /* 257 */
+    pub version: [u8; 2],    /* 263 */
+    pub uname: [u8; 32],     /* 265 */
+    pub gname: [u8; 32],     /* 297 */
+    pub devmajor: [u8; 8],   /* 329 */
+    pub devminor: [u8; 8],   /* 337 */
+    pub prefix: [u8; 155],   /* 345 */
     /* 500 */
     __padding: [u8; 12],
 }
@@ -74,6 +86,17 @@ pub struct EscapedSentinel {
     pub header: TarHeader,
 }
 
+pub struct ParsedInitial {
+    pub header: Range<usize>,
+    pub continues: Range<usize>,
+}
+
+pub enum ParsedEscape {
+    Entry(TarHeader, Range<usize>),
+    EndOfEscapes { html_data: Range<usize> },
+    Eof { end: usize },
+}
+
 impl TarEngine {
     /// Mangle the HTML prefix such that we can interpret it as a tar header.
     ///
@@ -94,7 +117,11 @@ impl TarEngine {
         // As payload of this extra header, we mark the HTML content as a comment and also close
         // off the tag itself. Technically, a newline is required but really we only care about not
         // having the data interpreted. So having the decompression think it is truncated is fine.
-        let extra = format!("{:010} comment=\">", 11 + tail_len);
+        let comment_introducer = " comment=\">";
+        let extra = format!(
+            "{:010}{comment_introducer}",
+            comment_introducer.len() + tail_len
+        );
 
         this.assign_size(extra.len() + tail_len);
         this.assign_permission_encoding_meta();
@@ -296,9 +323,116 @@ impl TarEngine {
     }
 }
 
+impl TarDecompiler {
+    pub fn start_of_file(&mut self, data: &[u8]) -> ParsedInitial {
+        assert!(data.len() >= core::mem::size_of::<TarHeader>());
+
+        let mut this = TarHeader::EMPTY;
+        this.assign_from_bytes(data[..512].try_into().unwrap());
+        assert_eq!(this.typeflag, b'x');
+
+        let size = this.parse_size().unwrap();
+        self.len += core::mem::size_of::<TarHeader>() as u64;
+        self.len += size;
+
+        // We ended the original header data before its closing tag and then append 6 bytes of
+        // an extra superfluous attribute introducer to it.
+        let end_of_original_header = this.name[1..].iter().position(|&b| b == b'\0').unwrap() - 6;
+        // Now find where the closing tag is. Which is part of the original data since we skipped
+        // it otherwise.
+        let continues = data[512..].iter().position(|&b| b == b'>').unwrap();
+
+        ParsedInitial {
+            header: 1..end_of_original_header,
+            continues: 512 + continues..self.len as usize,
+        }
+    }
+
+    pub fn next_escape(&mut self, data: &[u8]) -> ParsedEscape {
+        self.next_double_header(data)
+    }
+
+    pub fn continue_escape(&mut self, data: &[u8]) -> ParsedEscape {
+        let mut esc = self.next_double_header(data);
+
+        if let ParsedEscape::Eof { end } = &mut esc {
+            const TERMINATOR: &[u8] = b"</template>";
+            assert_eq!(data[*end..][..TERMINATOR.len()], *TERMINATOR);
+            // We have added the `</template>` outside any header so we need to also skip it here.
+            *end += TERMINATOR.len();
+        }
+
+        esc
+    }
+
+    fn next_double_header(&mut self, data: &[u8]) -> ParsedEscape {
+        self.pad_to_fit();
+
+        let Some(data) = data.get(self.len as usize..) else {
+            panic!("Ran out of data while looking for next double header");
+        };
+
+        let Some(header) = data.get(..512) else {
+            panic!("Ran out of data while looking for next double header");
+        };
+
+        let mut extension = TarHeader::EMPTY;
+        extension.assign_from_bytes(header.try_into().unwrap());
+
+        if extension.prefix.ends_with(b"</template>") {
+            let size = extension.parse_size().unwrap();
+            self.len += core::mem::size_of::<TarHeader>() as u64;
+            let start_of_data = self.len as usize;
+            self.len += size;
+            let end_of_data = self.len as usize;
+            return ParsedEscape::EndOfEscapes {
+                html_data: start_of_data..end_of_data,
+            };
+        }
+
+        let Some(file_raw) = data.get(512..1024) else {
+            panic!("Ran out of data while looking for next double header");
+        };
+
+        let mut file = TarHeader::EMPTY;
+        file.assign_from_bytes(file_raw.try_into().unwrap());
+        let size = file.parse_size().unwrap();
+
+        // Now check what we are dealing with.
+        if extension.as_bytes() == TarHeader::EMPTY.as_bytes()
+            && file.as_bytes() == TarHeader::EMPTY.as_bytes()
+        {
+            self.len += core::mem::size_of::<TarHeader>() as u64 * 2;
+
+            return ParsedEscape::Eof {
+                end: self.len as usize,
+            };
+        }
+
+        self.len += core::mem::size_of::<TarHeader>() as u64 * 2;
+        let file_start = self.len as usize;
+        // Followed by the data.
+        self.len += size;
+        let file_end = self.len as usize;
+
+        assert_eq!(extension.typeflag, b'x');
+        assert_eq!(extension.parse_size(), Ok(0));
+
+        ParsedEscape::Entry(file, file_start..file_end)
+    }
+
+    fn pad_to_fit(&mut self) {
+        self.len = self.len.next_multiple_of(512);
+    }
+}
+
 impl TarHeader {
     pub fn as_bytes(&self) -> &[u8] {
         bytemuck::bytes_of(self)
+    }
+
+    pub fn assign_from_bytes(&mut self, data: &[u8; 512]) {
+        bytemuck::bytes_of_mut(self).copy_from_slice(data);
     }
 
     pub fn assign_permission_encoding_meta(&mut self) {
@@ -334,6 +468,17 @@ impl TarHeader {
         let bytes = format!("{size:011o}\0");
         // Note: this is numeric, so can not contain a closing quote.
         self.size.copy_from_slice(bytes.as_bytes());
+    }
+
+    fn parse_size(&self) -> Result<u64, core::num::ParseIntError> {
+        if self.size[0] == b'\0' {
+            return Ok(0);
+        };
+
+        let size_str = core::str::from_utf8(&self.size)
+            .unwrap()
+            .trim_end_matches('\0');
+        u64::from_str_radix(size_str, 8)
     }
 
     const EMPTY: Self = TarHeader {
