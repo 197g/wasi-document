@@ -240,7 +240,7 @@ export default async function(configuration) {
 
   const kernel_bindings = WebAssembly.Module.customSections(wasm, 'wah_polyglot_wasm_bindgen');
 
-  // A kernel module is any Module which exposes a default export.that conforms
+  // A kernel module is any Module which exposes a default export that conforms
   // to our call interface. It will get passed a promise to the wasmblob
   // response of its process image and should be an awaitable that resolves to
   // the exports from the module. Simplistically this could be the `exports`
