@@ -20,7 +20,18 @@
 let __wah_stage0_global = {};
 const BOOT = 'boot/wah-init.wasm';
 
-function b64_decode(b64) {
+function b64_decode(b64, options={}) {
+  // Effectively a static, since calls share the default argument object.
+  if (options.tr === undefined) {
+    const IDX_STR = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/="
+    options.tr = new Uint8Array(256);
+
+    // Note `=` translates to 0o100
+    for (let i = 0; i <= 64; i++) {
+      options.tr[IDX_STR.charCodeAt(i)] = i;
+    }
+  }
+
   // Performance note: `/=*$/` is actually awfully slow (trace has some 164ms! for 256kb). So we only use it if we have to.
   let mk_buffer = undefined;
   // Overfull padding?
@@ -32,16 +43,16 @@ function b64_decode(b64) {
   }
 
   const buffer = new ArrayBuffer(mk_buffer);
-  const IDX_STR = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/="
   const view = new Uint8Array(buffer);
+  const tr = options.tr;
 
   let i = 0;
   let j = 0;
   for (; j < b64.length;) {
-    let a = IDX_STR.indexOf(b64.charAt(j++));
-    let b = IDX_STR.indexOf(b64.charAt(j++));
-    let c = IDX_STR.indexOf(b64.charAt(j++));
-    let d = IDX_STR.indexOf(b64.charAt(j++));
+    let a = tr[b64.charCodeAt(j++)] || 0;
+    let b = tr[b64.charCodeAt(j++)] || 0;
+    let c = tr[b64.charCodeAt(j++)] || 0;
+    let d = tr[b64.charCodeAt(j++)] || 0;
 
     view[i++] = (a << 2) | (b >> 4);
     if (c < 64) view[i++] = ((b & 0xf) << 4) | (c >> 2);
