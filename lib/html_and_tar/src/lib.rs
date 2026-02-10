@@ -1,5 +1,9 @@
 /// Learnings:
 ///
+/// Really you should be downloading the page via a hook and a stage3 module that rewrites the
+/// document based off its original state so we can curate the DOM modifications. At worst you
+/// MUST be able to extract the stored 'filesystem'.
+///
 /// When saving a page as HTML, browsers will often mangle the source itself. While this destroys
 /// the tar structure itself we want to be resilient against it. The following have been observed
 /// in practice:
@@ -11,11 +15,10 @@
 /// - The document is trimmed.
 /// - Text nodes have extra whitespace inserted (newlines).
 /// - <template> content is removed (i.e. parsed as a #document-fragment that is omitted during
-///   serialization). Well, you're screwed.
-///
-/// Really you should be downloading the page via a hook and a stage3 module that rewrites the
-/// document based off its original state but who knows. At worst you should be able to extract the
-/// stored 'filesystem'.
+///   serialization) with Save As in Chromium.
+/// - Most nodes invoke expensive parseHTML logic in the browser. But noscript does not! The
+///   content is technically wrong (only links allowed in head with scripts off) but eh. If you're
+///   using this document then you have scripts on and then everything is permissible.
 use core::ops::Range;
 
 // See resilience, this text can be rewritten by the browser with line feeds and we can restore the
@@ -204,8 +207,8 @@ impl TarEngine {
         let padding = self.pad_to_fit();
         let data = STANDARD.encode(data).into_bytes();
 
-        const START: &[u8] = b"\0<template class=\"wah_polyglot_data\" data-a=\"";
-        const DATA_START: &[u8] = b"\" shadowrootmode=open>";
+        const START: &[u8] = b"\0<noscript type=none class=\"wah_polyglot_data\" data-a=\"";
+        const DATA_START: &[u8] = b"\">";
         const ID: &[u8] = b"\" data-wahtml_id=\"";
         const CONT: &[u8] = b"\" data-b=\"";
 
@@ -292,8 +295,9 @@ impl TarEngine {
     ) -> EscapedData {
         let padding = self.pad_to_fit();
 
-        const START: &[u8] = b"\0</template><template class=\"wah_polyglot_data\" data-a=\"";
-        const DATA_START: &[u8] = b"\" shadowrootmode=open>";
+        const START: &[u8] =
+            b"\0</noscript><noscript type=none class=\"wah_polyglot_data\" data-a=\"";
+        const DATA_START: &[u8] = b"\">";
         const ID: &[u8] = b"\" data-wahtml_id=\"";
         const CONT: &[u8] = b"\" data-b=\"";
 
@@ -343,8 +347,8 @@ impl TarEngine {
     /// the next blocks of such data (again starting as `escaped_insert_base64`).
     pub fn escaped_end(&mut self, skip: usize) -> EscapedSentinel {
         let padding = self.pad_to_fit();
-        const START: &[u8] = b"\0</template><template>";
-        const END: &[u8] = b"\0</template>";
+        const START: &[u8] = b"\0</noscript><noscript type=none>";
+        const END: &[u8] = b"\0</noscript>";
 
         let mut this = TarHeader::EMPTY;
         this.name[..START.len()].copy_from_slice(START);
@@ -365,7 +369,7 @@ impl TarEngine {
             padding: self.pad_to_fit(),
             header: TarHeader::EMPTY,
             file: TarHeader::EMPTY,
-            data: b"</template>".to_vec(),
+            data: b"</noscript>".to_vec(),
         }
     }
 
@@ -450,7 +454,7 @@ impl TarDecompiler {
         let mut esc = self.next_double_header(data);
 
         if let ParsedEscape::Eof { end } = &mut esc {
-            const TERMINATOR: &[u8] = b"</template>";
+            const TERMINATOR: &[u8] = b"</noscript>";
             assert_eq!(data[*end..][..TERMINATOR.len()], *TERMINATOR);
             // We have added the `</template>` outside any header so we need to also skip it here.
             *end += TERMINATOR.len();
@@ -473,7 +477,7 @@ impl TarDecompiler {
         let mut extension = TarHeader::EMPTY;
         extension.assign_from_bytes(header.try_into().unwrap());
 
-        if extension.prefix.ends_with(b"</template>") {
+        if extension.prefix.ends_with(b"</noscript>") {
             let size = extension.parse_size().unwrap();
             self.len += core::mem::size_of::<TarHeader>() as u64;
             let start_of_data = self.len as usize;
