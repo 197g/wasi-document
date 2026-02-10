@@ -206,10 +206,9 @@ fn parse_file_elements<'dom: 'a, 'a>(
     // This is a visitor and short-circuits for elements we find uninteresting. Just never return
     // anything so the iteration visits every node.
     let _ = find_element(&dom, |node| {
-        let el = node.element().filter(|el| {
-            el.name.to_lowercase() == "template"
-                && el.classes.contains(&Cow::Borrowed("wah_polyglot_data"))
-        })?;
+        let el = node
+            .element()
+            .filter(|el| el.classes.contains(&Cow::Borrowed("wah_polyglot_data")))?;
 
         // FIXME: this is extra brittle because it is case-sensitive!!
         let given_name = el.attributes.get("data-wahtml_id")?;
@@ -422,7 +421,6 @@ impl<'text> SourceDocument<'text> {
                 el.children.retain(|child| {
                     child
                         .element()
-                        .filter(|el| el.name.to_lowercase() == "template")
                         .filter(|el| el.classes.contains(&Cow::Borrowed("wah_polyglot_data")))
                         .is_none()
                 })

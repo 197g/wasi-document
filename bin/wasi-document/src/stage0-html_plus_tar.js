@@ -21,7 +21,17 @@ let __wah_stage0_global = {};
 const BOOT = 'boot/wah-init.wasm';
 
 function b64_decode(b64) {
-  const buffer = new ArrayBuffer((b64.length / 4) * 3 - b64.match(/=*$/)[0].length);
+  // Performance note: `/=*$/` is actually awfully slow (trace has some 164ms! for 256kb). So we only use it if we have to.
+  let mk_buffer = undefined;
+  // Overfull padding?
+  if (b64.charAt(b64.length - 3) === '=') {
+    mk_buffer = (b64.length / 4) * 3 - b64.match(/=*$/)[0].length;
+  } else {
+    mk_buffer = (b64.length / 4) * 3 - (b64.charAt(b64.length - 2) === '=' ? 2 : b64.charAt(b64.length - 1) == '=' ? 1 : 0);
+
+  }
+
+  const buffer = new ArrayBuffer(mk_buffer);
   const IDX_STR = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/="
   const view = new Uint8Array(buffer);
 
