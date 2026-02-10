@@ -1,5 +1,25 @@
+/// Learnings:
+///
+/// When saving a page as HTML, browsers will often mangle the source itself. While this destroys
+/// the tar structure itself we want to be resilient against it. The following have been observed
+/// in practice:
+///
+/// - The doctype declaration is capitalized.
+/// - nul is replace with `\u{fffd}`.
+/// - nul is replace with `&#65533;`.
+/// - All attributes are normalized to lowercase spelling.
+/// - The document is trimmed.
+/// - Text nodes have extra whitespace inserted (newlines).
+/// - <template> content is removed (i.e. parsed as a #document-fragment that is omitted during
+///   serialization). Well, you're screwed.
+///
+/// Really you should be downloading the page via a hook and a stage3 module that rewrites the
+/// document based off its original state but who knows. At worst you should be able to extract the
+/// stored 'filesystem'.
 use core::ops::Range;
 
+// See resilience, this text can be rewritten by the browser with line feeds and we can restore the
+// original contents just fine.
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 
 mod bytemuck {
@@ -111,7 +131,7 @@ impl TarEngine {
         let consumed = html_head.len();
         let html_head = Self::doctype_safe_head(html_head);
 
-        const DATA_ESCAPE: &[u8] = b" data-A=\"";
+        const DATA_ESCAPE: &[u8] = b" data-a=\"";
         assert!(html_head.len() < 100 - DATA_ESCAPE.len());
         assert_eq!(html_head.last().copied(), Some(b'>'));
 
@@ -184,8 +204,8 @@ impl TarEngine {
         let padding = self.pad_to_fit();
         let data = STANDARD.encode(data).into_bytes();
 
-        const START: &[u8] = b"\0<template class=\"wah_polyglot_data\" data-A=\"";
-        const DATA_START: &[u8] = b"\">";
+        const START: &[u8] = b"\0<template class=\"wah_polyglot_data\" data-a=\"";
+        const DATA_START: &[u8] = b"\" shadowrootmode=open>";
         const ID: &[u8] = b"\" data-wahtml_id=\"";
         const CONT: &[u8] = b"\" data-b=\"";
 
@@ -273,7 +293,7 @@ impl TarEngine {
         let padding = self.pad_to_fit();
 
         const START: &[u8] = b"\0</template><template class=\"wah_polyglot_data\" data-a=\"";
-        const DATA_START: &[u8] = b"\">";
+        const DATA_START: &[u8] = b"\" shadowrootmode=open>";
         const ID: &[u8] = b"\" data-wahtml_id=\"";
         const CONT: &[u8] = b"\" data-b=\"";
 
