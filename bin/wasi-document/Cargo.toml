@@ -11,6 +11,8 @@ serde_json = "1"
 toml.workspace = true
 walkdir = "2.5"
 wasi-document-dom.workspace = true
+wasi-document-minify-js.workspace = true
 
 wasm-encoder = "0.20"
 wasmparser = "0.95"
+

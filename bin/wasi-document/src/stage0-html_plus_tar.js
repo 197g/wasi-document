@@ -46,7 +46,7 @@ window.addEventListener('load', async function() {
   const dataElements = document.getElementsByClassName('wah_polyglot_data');
 
   let global = __wah_stage0_global;
-  global.file_elements = {};
+  global.file_objects = [];
   global.file_data = {};
 
   for (let el of dataElements) {
@@ -57,8 +57,6 @@ window.addEventListener('load', async function() {
     if (givenName === null) {
       continue;
     }
-
-    global.file_elements[givenName] = el;
     // NOTE: usually we `firstChild.textContent`. But for reasons unknown to me
     // at the moment of writing this truncates the resulting string to a clean
     // 1<<16 bytes instead of retaining the full encoding; in Chromium browsers
@@ -70,6 +68,32 @@ window.addEventListener('load', async function() {
     const b64 = el.content.textContent;
     const raw_content = b64_decode(b64);
     global.file_data[givenName] = raw_content;
+
+    // The `TarHeader` contents except for the name (first field), so at an
+    // offset 100 bytes into the header. Note: offsets are dependent on the
+    // browser encoding but since the whole header is encoded as ASCII this is
+    // reasonably exactly one byte per char, i.e. in both UTF-8 and UTF-16 the
+    // offsets are the same.
+    const file_header = el.getAttribute('__b');
+
+    // Note we do not attach the DOM element here. We want a clean, pure memory
+    // representation of the file system tree here. (That we can send to a
+    // worker).
+    global.file_objects.push({
+      header: {
+        all: file_header,
+        name: givenName,
+        mode: file_header?.slice(0, 8) || '',
+        uid: file_header ? parseInt(file_header.slice(8, 16), 8) : 0,
+        gid: file_header ? parseInt(file_header.slice(16, 24), 8) : 0,
+        size: file_header ? parseInt(file_header.slice(24, 36), 8) : 0,
+        mtime: file_header ? parseInt(file_header.slice(36, 48), 8) : 0,
+        typeflag: file_header?.charCodeAt(56) || 0,
+        uname: file_header ? file_header.slice(165, 197).replace(/\0.*$/, '') : '',
+        gname: file_header ? file_header.slice(197, 229).replace(/\0.*$/, '') : '',
+      },
+      data: raw_content,
+    });
   }
 
   const boot_wasm_bytes = global.file_data[BOOT];
@@ -89,8 +113,8 @@ window.addEventListener('load', async function() {
     let blobURL = URL.createObjectURL(blob);
     let module = (await import(blobURL));
     console.debug('Wasm-As-HTML bootstrapping stage-0: handoff');
-    await module.default(boot_wasm_bytes, wasm, global.file_data);
+    await module.default(boot_wasm_bytes, wasm, global.file_objects);
   } catch (e) {
     console.error('Wasm-As-HTML failed to initialized', global, e);
   }
-})
+});

@@ -381,8 +381,10 @@ async function worker_mount({
   configuration.WASI = WASI;
 
   if (wasi_root_fs) {
+    let wasi_root_files = new Map(wasi_root_fs.map(item => [item.header.name, item.data]));
+
     // The given layer will be underlaid the inputs to the boot archive extractor.
-    for (const [key, value] of Object.entries(wasi_root_fs)) {
+    for (const [key, value] of wasi_root_files) {
       let dirs = key.split('/');
       const file = dirs.pop();
 

@@ -1,5 +1,5 @@
-async function init(bytes, wasm, wasi_root_fs) {
-  let index_html = WebAssembly.Module.customSections(wasm, 'wah_polyglot_stage1_html');
+async function init(bytes, boot_wasm, wasi_root_fs) {
+  let index_html = WebAssembly.Module.customSections(boot_wasm, 'wah_polyglot_stage1_html');
 
   if (index_html.length) {
     document.documentElement.innerHTML = (new TextDecoder().decode(index_html[0]));
@@ -10,7 +10,7 @@ async function init(bytes, wasm, wasi_root_fs) {
     }
   }
 
-  let stage2 = WebAssembly.Module.customSections(wasm, 'wah_polyglot_stage2');
+  let stage2 = WebAssembly.Module.customSections(boot_wasm, 'wah_polyglot_stage2');
   if (!stage2.length) {
     throw 'Found no application data. Please check distribution.';
   }
@@ -27,8 +27,6 @@ async function init(bytes, wasm, wasi_root_fs) {
   let blobURL = URL.createObjectURL(blob);
   let stage2_module = (await import(blobURL));
 
-  /** wasm-bindgen: creates one 
-  */
   let wasmblob = new Blob([bytes], { type: 'application/wasm' });
   stage2_module.default({
     module_or_path: Promise.resolve(new Response(wasmblob)),

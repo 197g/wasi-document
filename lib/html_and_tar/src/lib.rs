@@ -181,11 +181,20 @@ impl TarEngine {
         let mut file = TarHeader::EMPTY;
         let end_start = this.prefix.len() - DATA_START.len();
         file.name[..qualname.len()].copy_from_slice(qualname.as_bytes());
-        file.name[qualname.len()..][1..][..CONT.len()].copy_from_slice(CONT);
+
+        // We place the closing quotation for the HTML attribute covering the file name at the end
+        // of this field. This does not influence the Tar interpretation (nul-byte is already
+        // present) but the wrapping of the rest of the header is then aligned consistently. The
+        // HTML attribute is then closed offset in the last standard field `prefix`.
+        let cont_place = &mut file.name[qualname.len()..][1..];
+        let cont_idx = cont_place.len() - CONT.len();
+        cont_place[cont_idx..].copy_from_slice(CONT);
+        file.prefix[end_start..].copy_from_slice(DATA_START);
+
         file.assign_size(data.len());
         file.assign_permission_encoding_meta();
-        file.prefix[end_start..].copy_from_slice(DATA_START);
         file.assign_checksum();
+
         self.len += core::mem::size_of::<TarHeader>() as u64;
 
         // Followed by the data.
@@ -253,10 +262,18 @@ impl TarEngine {
         let mut file = TarHeader::EMPTY;
         let end_start = file.prefix.len() - DATA_START.len();
         file.name[..qualname.len()].copy_from_slice(qualname.as_bytes());
-        file.name[qualname.len()..][1..][..CONT.len()].copy_from_slice(CONT);
-        file.assign_permission_encoding_meta();
-        file.assign_size(data.len());
+
+        // We place the closing quotation for the HTML attribute covering the file name at the end
+        // of this field. This does not influence the Tar interpretation (nul-byte is already
+        // present) but the wrapping of the rest of the header is then aligned consistently. The
+        // HTML attribute is then closed offset in the last standard field `prefix`.
+        let cont_place = &mut file.name[qualname.len()..][1..];
+        let cont_idx = cont_place.len() - CONT.len();
+        cont_place[cont_idx..].copy_from_slice(CONT);
         file.prefix[end_start..].copy_from_slice(DATA_START);
+
+        file.assign_size(data.len());
+        file.assign_permission_encoding_meta();
 
         hook(&mut this, &mut file);
 
