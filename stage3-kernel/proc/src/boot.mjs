@@ -139,10 +139,11 @@ class ProcessSettled {
   }
 
   file_data(path) {
-    return this.configuration.fds[3]
-      ?.path_open(0, path, 0, 0)
-      ?.fd_obj
-      ?.file.data.buffer;
+    let preopen = this.configuration.fds[3];
+	  console.log(preopen);
+    let fd = preopen?.path_open(0, path, 0, 0);
+	  console.log(fd);
+    return fd?.fd_obj?.file.data.buffer;
   }
 
   remote() {
@@ -184,6 +185,7 @@ class ProcessSettled {
     let newWasi = new this.configuration.WASI(args, [], fds);
     var wasi_imports = { 'wasi_snapshot_preview1': newWasi.wasiImport };
     const instance = await WebAssembly.instantiate(wasm, wasi_imports);
+	  console.log('Starting process ', newWasi);
 
     try {
       await newWasi.start({ 'exports': instance.exports });
@@ -238,48 +240,20 @@ export default async function(configuration) {
 
   let newWasi = new configuration.WASI(configuration.args, configuration.env, configuration.fds);
 
+  /* */
   const kernel_bindings = WebAssembly.Module.customSections(wasm, 'wah_polyglot_wasm_bindgen');
 
-  // A kernel module is any Module which exposes a default export that conforms
-  // to our call interface. It will get passed a promise to the wasmblob
-  // response of its process image and should be an awaitable that resolves to
-  // the exports from the module. Simplistically this could be the `exports`
-  // attribute from the `Instance` itself.
-  let kernel_module = undefined;
-  if (kernel_bindings.length > 0 && false) {
-    // fIXME: no longer implemented under WebWorker sandbox. But the code is also not ready to target both environments transparently.
-    document.__wah_wasi_imports = newWasi.wasiImport;
-
-    // Create a module that the kernel can `import` via ECMA semantics. This
-    // enables such kernel modules to be independent from our target. In fact,
-    // we do expect them to be created via Rust's `wasm-bindgen` for instance.
-    let testmodule = Object.keys(document.__wah_wasi_imports)
-      .map((name, _) => `export const ${name} = document.__wah_wasi_imports.${name};`)
-      .join('\n');
-    let wasi_blob = new Blob([testmodule], { type: 'application/javascript' });
-    let objecturl = URL.createObjectURL(wasi_blob);
-
-    // FIXME: should be an import map where `wasi_snapshot_preview1` is an
-    // alias for our just created object URL module.
-    const wbg_source = new TextDecoder().decode(kernel_bindings[0])
-      .replace('wasi_snapshot_preview1', objecturl);
-
-    let wbg_blob = new Blob([wbg_source], { type: 'application/javascript' });
-    let wbg_url = URL.createObjectURL(wbg_blob);
-    kernel_module = await import(wbg_url);
-  }
-
-  const rootdir = configuration.fds[3];
-  configuration.fds[0] = rootdir.path_open(0, "proc/0/fd/0", 0, 1).fd_obj;
-  configuration.fds[1] = rootdir.path_open(0, "proc/0/fd/1", 0, 1).fd_obj;
-  configuration.fds[2] = rootdir.path_open(0, "proc/0/fd/2", 0, 1).fd_obj;
+  const root_fs = configuration.fds[3];
+  configuration.fds[0] = root_fs.path_open(0, "proc/0/fd/0", 0, 1).fd_obj;
+  configuration.fds[1] = root_fs.path_open(0, "proc/0/fd/1", 0, 1).fd_obj;
+  configuration.fds[2] = root_fs.path_open(0, "proc/0/fd/2", 0, 1).fd_obj;
   configuration.args.length = 0;
 
   const input_decoder = new TextDecoder('utf-8');
   const assign_arguments = (path, push_with, cname) => {
     cname = cname || 'cmdline';
     let cmdline = undefined;
-    if (cmdline = rootdir.path_open(0, path, 0, 1).fd_obj) {
+    if (cmdline = root_fs.path_open(0, path, 0, 1).fd_obj) {
       let data = cmdline.file.data;
       let nul_split = -1;
       while ((nul_split = data.indexOf(0)) >= 0) {
@@ -302,6 +276,11 @@ export default async function(configuration) {
   try {
     console.log('Dispatch stage3 into init', configuration);
     var wasi_imports = { 'wasi_snapshot_preview1': newWasi.wasiImport };
+
+    let executable = configuration.args[0] || 'proc/0/exe';
+    const process = root_fs?.path_open(0, executable, 0, 0)?.fd_obj;
+    let blob = new Blob([process.file.data.buffer], { type: 'application/wasm' });
+    let wasm = await WebAssembly.compileStreaming(new Response(blob));
 
     // FIXME: hardcoded, should be configurable. Also if we launch multiple
     // process instances concurrently then they are configured by finding a
@@ -337,18 +316,9 @@ export default async function(configuration) {
     var source_headers = {};
     var wasi_exports = undefined;
 
-    if (kernel_module !== undefined) {
-      const wasmblob = new Blob([configuration.wasm], { type: 'application/wasm' });
-      wasi_exports = await kernel_module.default(Promise.resolve(new Response(wasmblob, {
-        'headers': source_headers,
-      })));
-
-      await newWasi.start({ 'exports': wasi_exports });
-    } else {
-      const instance = await WebAssembly.instantiate(wasm, wasi_imports);
-      wasi_exports = instance.exports;
-      await newWasi.start({ 'exports': wasi_exports });
-    }
+    const instance = await WebAssembly.instantiate(wasm, wasi_imports);
+    wasi_exports = instance.exports;
+    await newWasi.start({ 'exports': wasi_exports });
   } catch (e) {
     if (typeof(e) == 'string' && e == 'exit with exit code 0') {} else {
       console.dir(typeof(e), e);
