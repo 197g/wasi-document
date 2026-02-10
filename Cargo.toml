@@ -42,3 +42,5 @@ strip = true
 
 [profile.dev.package.lithtml]
 opt-level = 2
+[profile.dev.package.pest]
+opt-level = 2

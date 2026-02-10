@@ -1,8 +1,8 @@
 use core::{error::Error, ops};
 use std::borrow::Cow;
 
-use html_and_tar::TarHeader;
-use lithtml::{Dom, Node};
+use html_and_tar::{ParsedFileData, TarDecompiler, TarHeader};
+use lithtml::{Dom, Element, Node};
 
 pub struct Structure {
     pub html_tag: TagSpan,
@@ -46,7 +46,8 @@ fn parse_tar_tags(source: &mut SourceDocument) -> Result<Structure, Box<dyn Erro
     let mut is_original = true;
 
     loop {
-        dom = Dom::parse(&source.text)?;
+        let text = source.text.trim_matches('\0');
+        dom = Dom::parse(text)?;
 
         let pre_html = find_element(&dom, |node| {
             node.element().filter(|el| el.name.to_lowercase() == "html")
@@ -199,41 +200,33 @@ fn parse_tar_tags(source: &mut SourceDocument) -> Result<Structure, Box<dyn Erro
 
 fn parse_file_elements<'dom: 'a, 'a>(
     dom: &'dom Dom<'a>,
-) -> Result<Vec<(TarHeader, &'dom Node<'a>)>, Box<dyn Error>> {
+) -> Result<Vec<(TarHeader, &'dom Element<'a>)>, Box<dyn Error>> {
     let mut nodes = vec![];
 
     // This is a visitor and short-circuits for elements we find uninteresting. Just never return
     // anything so the iteration visits every node.
     let _ = find_element(&dom, |node| {
-        let el = node
-            .element()
-            .or_else(|| {
-                eprintln!("Found non-element node {node:?}, skipping");
-                None
-            })
-            .inspect(|el| {
-                eprintln!("Found dom element with name `{}`", el.name);
-            })
-            .filter(|el| el.name.to_lowercase() == "template")?;
+        let el = node.element().filter(|el| {
+            el.name.to_lowercase() == "template"
+                && el.classes.contains(&Cow::Borrowed("wah_polyglot_data"))
+        })?;
 
-        eprintln!("Found template element");
-
+        // FIXME: this is extra brittle because it is case-sensitive!!
         let given_name = el.attributes.get("data-wahtml_id")?;
         let given_name = given_name.as_deref()?;
         let given_name = given_name.trim_matches('\0');
-        eprintln!("Found file node with name `{given_name}`");
 
         let header = el.attributes.get("data-b")?;
-        let header = header.as_deref()?;
+        let header = header.as_deref()?.as_bytes();
 
         let mut bytes = [0u8; 512];
-        bytes[100..].copy_from_slice(header.as_bytes());
+        bytes[100..][..header.len()].copy_from_slice(header);
 
         let mut header = TarHeader::EMPTY;
         header.assign_from_bytes(&bytes);
         header.name[..given_name.len()].copy_from_slice(given_name.as_bytes());
 
-        nodes.push((header, node));
+        nodes.push((header, el));
 
         None::<()>
     });
@@ -249,12 +242,10 @@ fn find_element<'a, T>(dom: &'a Dom, mut with: impl FnMut(&'a Node) -> Option<T>
             return Some(find);
         }
 
-        let children = top.element().into_iter().flat_map(|el| el.children.iter());
-
-        if top.element().is_some_and(|el| el.name == "head") {
-            let el = top.element().unwrap();
-            eprintln!("{}", el.children.len());
-        }
+        let children = top
+            .element()
+            .into_iter()
+            .flat_map(|el| el.children.iter().rev());
 
         stack.extend(children);
     }
@@ -316,10 +307,20 @@ impl<'text> SourceDocument<'text> {
     }
 
     pub fn span(&self, span: TagSpan) -> ops::Range<usize> {
+        let bias = |loc: &SourceCharacter| {
+            if loc.line == 1 {
+                self.text.len() - self.text.trim_start_matches('\0').len()
+            } else {
+                0
+            }
+        };
+
         // FIXME: unsure if the `column` attribute is by character or byte offset.
         let start = self.by_line[span.start.line.checked_sub(1).unwrap()]
+            + bias(&span.start)
             + span.start.column.checked_sub(1).unwrap();
         let end = self.by_line[span.end.line.checked_sub(1).unwrap()]
+            + bias(&span.end)
             + span.end.column.checked_sub(1).unwrap();
 
         start..end
@@ -351,22 +352,60 @@ impl<'text> SourceDocument<'text> {
         parse_tar_tags(self)
     }
 
-    pub fn tar_contents(&self) -> Result<Vec<TarFile>, Box<dyn Error>> {
+    pub fn split_tar_contents(&mut self) -> Result<Vec<TarFile>, Box<dyn Error>> {
         // FIXME: the parser can not handle this. Unfortunate.
         let text = self.text.trim_matches('\0');
-        let dom = Dom::parse(text)?;
+
+        let mut dom = Dom::parse(text)?;
         let elements = parse_file_elements(&dom)?;
 
-        let files = elements.into_iter().map(|(header, _node)| {
-            TarFile {
-                header,
-                // FIXME: we need to extract the content from the node, but we
-                // don't have a way to do that yet.
-                content: vec![],
+        let files = elements.into_iter().flat_map(|(header, element)| {
+            if element.children.len() > 1 {
+                eprintln!("Warning: file element has too many children, but we will ignore them",);
             }
+
+            let text = element
+                .children
+                .iter()
+                .find_map(|child| child.text())
+                .expect("<template> file element has no text child?");
+
+            let bytes = text.trim_matches('\0').as_bytes();
+            let content = match TarDecompiler::file_data(&header, bytes) {
+                ParsedFileData::Data(content) => content,
+                // In fact not a file element.
+                ParsedFileData::Nothing => return None,
+            };
+
+            Some(TarFile { header, content })
         });
 
-        Ok(files.collect())
+        let files = files.collect();
+
+        // Now clean that data from our DOM, make it into an original document..
+        if let Some(html) = dom.children.first_mut() {
+            if let lithtml::Node::Element(el) = html {
+                el.attributes.remove("data-A");
+            }
+        };
+
+        find_element_mut(&mut dom, |node| {
+            if let lithtml::Node::Element(el) = node {
+                el.children.retain(|child| {
+                    child
+                        .element()
+                        .filter(|el| el.name.to_lowercase() == "template")
+                        .filter(|el| el.classes.contains(&Cow::Borrowed("wah_polyglot_data")))
+                        .is_none()
+                })
+            }
+
+            false
+        });
+
+        *self = SourceDocument::from_reparse(&dom);
+
+        Ok(files)
     }
 }
 

@@ -1,7 +1,7 @@
 mod build;
 mod project;
 
-use std::{io::Write as _, path::PathBuf};
+use std::{ffi::CStr, io::Write as _, path::PathBuf};
 
 use clap::Parser;
 use wasi_document_dom as dom;
@@ -50,7 +50,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let project = build::generate(&project)?;
             merge_wasm(&project)
         }
-        Args::Rebuild { file, .. } => rebuild_wasm(&project, file),
+        Args::Rebuild { file, .. } => {
+            let project = build::generate(&project)?;
+            rebuild_wasm(&project, file)
+        }
     }
 }
 
@@ -138,7 +141,7 @@ fn merge_wasm(project: &Work) -> Result<(), Box<dyn std::error::Error>> {
     seq_of_bytes.push(eof.data.as_slice());
 
     seq_of_bytes.push(source[where_to_insert.end..where_to_enter.start].as_bytes());
-    seq_of_bytes.push(b"<script>");
+    seq_of_bytes.push(b"<script id=WAH_POLYGLOT_HTML_PLUS_TAR_STAGE0>");
     seq_of_bytes.push(&source_script);
     seq_of_bytes.push(b"</script>");
     seq_of_bytes.push(source[where_to_enter.end..].as_bytes());
@@ -158,19 +161,82 @@ fn merge_wasm(project: &Work) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn rebuild_wasm(
-    _: &project::Configuration,
-    file: PathBuf,
-) -> Result<(), Box<dyn std::error::Error>> {
+fn rebuild_wasm(project: &Work, file: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let source = std::fs::read_to_string(file)?;
-    let source = dom::SourceDocument::new(&source);
-    let files = source.tar_contents()?;
 
-    for wasi_document_dom::TarFile { header, content: _ } in files.iter() {
-        eprintln!(
-            "Files in the document: {:?}",
-            (header.name, header.parse_size())
+    let mut source = dom::SourceDocument::new(&source);
+    let files = source.split_tar_contents()?;
+
+    let structure = source.prepare_tar_structure()?;
+
+    let mut engine = html_and_tar::TarEngine::default();
+    let mut seq_of_bytes: Vec<&[u8]> = vec![];
+
+    let mut head_span = source.span(structure.html_tag);
+    head_span.end = head_span.start + structure.html_insertion_point;
+    head_span.start = 0;
+
+    let head = &source[head_span];
+    let where_to_insert = source.span(structure.insertion_tag);
+    let where_to_enter = source.span(structure.stage0);
+
+    assert!(where_to_insert.end < where_to_enter.start);
+
+    let init = engine.start_of_file(head.as_bytes(), where_to_insert.start);
+    seq_of_bytes.push(init.header.as_bytes());
+    seq_of_bytes.push(init.extra.as_slice());
+    seq_of_bytes.push(source[init.consumed..where_to_insert.start].as_bytes());
+
+    let mut pushed_data = vec![];
+    let mut insert_with = if false {
+        // Force coercion and unification to a function pointer here already.
+        html_and_tar::TarEngine::escaped_continue_base64
+    } else {
+        html_and_tar::TarEngine::escaped_insert_base64
+    };
+
+    for wasi_document_dom::TarFile { header, content } in files.iter() {
+        let cstr = CStr::from_bytes_until_nul(&header.name).unwrap();
+        let entry = insert_with(
+            &mut engine,
+            html_and_tar::Entry {
+                name: &cstr.to_string_lossy(),
+                data: content,
+            },
         );
+
+        insert_with = html_and_tar::TarEngine::escaped_continue_base64;
+        pushed_data.push(entry);
+    }
+
+    for entry in &pushed_data {
+        seq_of_bytes.push(entry.padding);
+        seq_of_bytes.push(entry.header.as_bytes());
+        seq_of_bytes.push(entry.file.as_bytes());
+        seq_of_bytes.push(entry.data.as_slice());
+    }
+
+    let eof = engine.escaped_eof();
+    seq_of_bytes.push(eof.padding);
+    seq_of_bytes.push(eof.header.as_bytes());
+    seq_of_bytes.push(eof.file.as_bytes());
+    seq_of_bytes.push(eof.data.as_slice());
+
+    seq_of_bytes.push(source[where_to_insert.end..where_to_enter.start].as_bytes());
+    // Insert the original script unchanged but this could be used to update it.
+    seq_of_bytes.push(source[where_to_enter.start..where_to_enter.end].as_bytes());
+    seq_of_bytes.push(source[where_to_enter.end..].as_bytes());
+
+    let wasm = seq_of_bytes.join(&b""[..]);
+
+    match &project.out {
+        None => {
+            let mut stdout = std::io::stdout();
+            stdout.write_all(&wasm)?;
+        }
+        Some(path) => {
+            std::fs::write(path, &wasm)?;
+        }
     }
 
     Ok(())

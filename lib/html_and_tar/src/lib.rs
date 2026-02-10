@@ -98,6 +98,11 @@ pub enum ParsedEscape {
     Eof { end: usize },
 }
 
+pub enum ParsedFileData {
+    Data(Vec<u8>),
+    Nothing,
+}
+
 impl TarEngine {
     /// Mangle the HTML prefix such that we can interpret it as a tar header.
     ///
@@ -267,10 +272,10 @@ impl TarEngine {
     ) -> EscapedData {
         let padding = self.pad_to_fit();
 
-        const START: &[u8] = b"\0</template><template class=\"wah_polyglot_data\" data-A=\"";
+        const START: &[u8] = b"\0</template><template class=\"wah_polyglot_data\" data-a=\"";
         const DATA_START: &[u8] = b"\">";
         const ID: &[u8] = b"\" data-wahtml_id=\"";
-        const CONT: &[u8] = b"\" data-B=\"";
+        const CONT: &[u8] = b"\" data-b=\"";
 
         let mut this = TarHeader::EMPTY;
         this.name[..START.len()].copy_from_slice(START);
@@ -385,6 +390,36 @@ impl TarDecompiler {
             header: 1..end_of_original_header,
             continues: 512 + continues..self.len as usize,
         }
+    }
+
+    pub fn escaped_data(&self, data: &[u8], escape: &ParsedEscape) -> ParsedFileData {
+        match escape {
+            ParsedEscape::Entry(header, range) => {
+                let Some(data) = data.get(range.clone()) else {
+                    panic!("Ran out of data while looking for file data");
+                };
+
+                Self::file_data(header, data)
+            }
+            ParsedEscape::EndOfEscapes { .. } | ParsedEscape::Eof { .. } => {
+                return ParsedFileData::Nothing;
+            }
+        }
+    }
+
+    pub fn file_data(header: &TarHeader, data: &[u8]) -> ParsedFileData {
+        if header.typeflag == b'x' {
+            // This isn't a file, this is a header!
+            return ParsedFileData::Nothing;
+        }
+
+        if header.typeflag == b'S' {
+            // FIXME: this file was outlined from the document. Return the URL reference
+            // and checksum for it instead.
+            return ParsedFileData::Nothing;
+        }
+
+        ParsedFileData::Data(STANDARD.decode(data).unwrap())
     }
 
     pub fn next_escape(&mut self, data: &[u8]) -> ParsedEscape {
