@@ -1,0 +1,17 @@
+[package]
+name = "wasi-document-minify-js"
+description = "Proxy to a minify library, because none are a onestop solution"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+# All derived from `oxc_minifier` as the high-level dependency. Im going to be
+# honest, as much as I can enjoy options this is a really bad structure in
+# terms of developer experience. Half of the values are created for one
+# function call.
+oxc_allocator = "*"
+oxc_codegen = "*"
+oxc_minifier = "0.112"
+oxc_parser = "*"
+oxc_span = "*"

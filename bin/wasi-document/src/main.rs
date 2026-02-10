@@ -26,8 +26,6 @@ struct Work {
     index_html: PathBuf,
     stage2: Vec<u8>,
     kernel: Vec<u8>,
-    /// The "user-space" init process to use.
-    init: Vec<u8>,
     edit: bool,
     root_fs: Option<PathBuf>,
     out: Option<PathBuf>,
@@ -42,10 +40,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn merge_wasm(project: &Work) -> Result<(), Box<dyn std::error::Error>> {
     let source = std::fs::read_to_string(&project.index_html)?;
-    let binary_wasm = finalize_wasm(&project.init, &project.stage2, project)?;
+    let bootable = finalize_wasm(&project.kernel, &project.stage2, project)?;
 
     let mut source = dom::SourceDocument::new(&source);
-    let source_script = include_bytes!("stage0-html_plus_tar.js");
+    let source_script = minify_js(include_bytes!("stage0-html_plus_tar.js"));
 
     let structure = source.prepare_tar_structure()?;
 
@@ -71,12 +69,12 @@ fn merge_wasm(project: &Work) -> Result<(), Box<dyn std::error::Error>> {
 
     pushed_data.push(engine.escaped_insert_base64(html_and_tar::Entry {
         name: "boot/init",
-        data: &project.kernel,
+        data: &bootable,
     }));
 
     pushed_data.push(engine.escaped_continue_base64(html_and_tar::Entry {
         name: "boot/wah-init.wasm",
-        data: &binary_wasm,
+        data: &bootable,
     }));
 
     if let Some(root) = &project.root_fs {
@@ -125,7 +123,7 @@ fn merge_wasm(project: &Work) -> Result<(), Box<dyn std::error::Error>> {
 
     seq_of_bytes.push(source[where_to_insert.end..where_to_enter.start].as_bytes());
     seq_of_bytes.push(b"<script>");
-    seq_of_bytes.push(source_script);
+    seq_of_bytes.push(&source_script);
     seq_of_bytes.push(b"</script>");
     seq_of_bytes.push(source[where_to_enter.end..].as_bytes());
 
@@ -153,14 +151,19 @@ fn finalize_wasm(
 
     let mut encoder = wasm_encoder::Module::new();
 
+    let custom_stage1;
     // The actual (document) loader that prepares inputs and control for stage 2.
     encoder.section(&wasm_encoder::CustomSection {
         name: "wah_polyglot_stage1",
-        data: if args.edit {
-            assert!(std::env::var_os("WAH_POLYGLOT_EXPERIMENTAL").is_some());
-            include_bytes!("stage1-edit.js")
-        } else {
-            include_bytes!("stage1.js")
+        data: {
+            custom_stage1 = if args.edit {
+                assert!(std::env::var_os("WAH_POLYGLOT_EXPERIMENTAL").is_some());
+                minify_js(include_bytes!("stage1-edit.js"))
+            } else {
+                minify_js(include_bytes!("stage1.js"))
+            };
+
+            &custom_stage1
         },
     });
 
@@ -196,4 +199,8 @@ fn finalize_wasm(
     }
 
     Ok(encoder.finish())
+}
+
+fn minify_js(bytes: &[u8]) -> Vec<u8> {
+    wasi_document_minify_js::minify_js(bytes)
 }

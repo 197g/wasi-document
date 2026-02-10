@@ -57,7 +57,7 @@ async function display(proc) {
     ]);
 
     let dispatched = await proc.dispatch({
-      executable: 'proc/0/exe',
+      executable: 'bin/fidget-cli.wasm',
       args: ['bin/fidget-cli.wasm', 'render3d', '--input', file, '-o', 'out.png', '--size', '256'],
       element: element,
     });
@@ -65,13 +65,37 @@ async function display(proc) {
     replace_proc(dispatched, '256px');
   }
 
-  const redo = proc.remote().select([
+  let redo = proc.remote().select([
     { 'by-id': main_id },
   ]);
 
   let dispatched = await proc.dispatch({
-    executable: 'proc/0/exe',
+    executable: 'bin/fidget-cli.wasm',
+    args: ['bin/fidget-cli.wasm', 'render3d', '--input', 'models/gyroid-sphere.rhai', '-o', 'out.png', '--size', '512'],
+    element: redo,
+  });
+
+  replace_proc(dispatched, '100%', main_id);
+
+  redo = proc.remote().select([
+    { 'by-id': main_id },
+  ])
+
+  dispatched = await proc.dispatch({
+    executable: 'bin/fidget-cli.wasm',
     args: ['bin/fidget-cli.wasm', 'render3d', '--input', 'models/gyroid-sphere.rhai', '-o', 'out.png', '--size', '1024'],
+    element: redo,
+  });
+
+  replace_proc(dispatched, '100%', main_id);
+
+  redo = proc.remote().select([
+    { 'by-id': main_id },
+  ])
+
+  dispatched = await proc.dispatch({
+    executable: 'bin/fidget-cli.wasm',
+    args: ['bin/fidget-cli.wasm', 'render3d', '--input', 'models/gyroid-sphere.rhai', '-o', 'out.png', '--size', '2048'],
     element: redo,
   });
 

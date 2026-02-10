@@ -69,6 +69,7 @@ fn main() {
         seq_of_bytes.push(end.padding);
         seq_of_bytes.own(end.header.as_bytes());
         seq_of_bytes.own(end.file.as_bytes());
+        seq_of_bytes.own(end.data.as_slice());
 
         seq_of_bytes.push(HTML[where_to_insert..].as_bytes());
     }

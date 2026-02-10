@@ -47,7 +47,36 @@ async function fallback_shell(configuration, error) {
   console.log(error);
 }
 
-async function mount({ module_or_path, wasi_root_fs, wasi_stage_url }) {
+/** Stage 2 entry point: our goal here is to prepare an environment for the WASM 'kernel' to run.
+ *
+ * This means in particular we will create a worker and setup its module and a
+ * communication channel between us and it. This serves two purposes: 1) it
+ * allows us to run the kernel in a clean environment where it can more easily
+ * control the extent of sandboxing 2) we move its event loop away from the
+ * main page event loop, especially until we have async callbacks for Wasm
+ * (JSPI).
+ *
+ * We present as a type of 'firmware' to the kernel. It was previously less
+ * clear how to map the environment's capabilities to the implementation but if
+ * we want to have an actual document then we must do something with a UI.
+ * Clearly PDF and HTML present very different interactive capabilities and to
+ * use them at all means to have a way of executing in the actual page context.
+ * We don't want to build our own abstraction for this, that'd be stupidly
+ * expensive and for what point? So rather we punt this to the user. Whatever
+ * visualization you want but we give you the tools to separate WASI running in
+ * a neatly controlled environment from WASI running in the main thread of the
+ * page. This is achieved as firmware modules and kernel modules. The former
+ * provide any capability you want, the latter allow you to create any hook you
+ * want to access those capabilities.
+ */
+async function mount({
+  /* A Promise to a Response object that resolves to the WASM kernel module. */
+  module_or_path,
+  /* An array with the elements of the root FS as a tar-like structure */
+  wasi_root_fs,
+  /* An (Object) URL resolving to the stage 2 code itself */
+  wasi_stage_url,
+}) {
   const wasmbody = await (await module_or_path).arrayBuffer();
 
   // Absurdly hacky way to construct our worker.js source code.
@@ -352,8 +381,10 @@ async function worker_mount({
   configuration.WASI = WASI;
 
   if (wasi_root_fs) {
+    let wasi_root_files = new Map(wasi_root_fs.map(item => [item.header.name, item.data]));
+
     // The given layer will be underlaid the inputs to the boot archive extractor.
-    for (const [key, value] of Object.entries(wasi_root_fs)) {
+    for (const [key, value] of wasi_root_files) {
       let dirs = key.split('/');
       const file = dirs.pop();
 
