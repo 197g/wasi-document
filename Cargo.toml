@@ -39,3 +39,6 @@ path = "lib/minify-js"
 [profile.release]
 opt-level = 's'
 strip = true
+
+[profile.dev.package.lithtml]
+opt-level = 2

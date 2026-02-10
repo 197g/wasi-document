@@ -457,7 +457,7 @@ dependencies = [
 
 [[package]]
 name = "html_and_tar"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "base64",
 ]
@@ -1791,6 +1791,7 @@ dependencies = [
 name = "wasi-document-dom"
 version = "0.0.0"
 dependencies = [
+ "html_and_tar",
  "lithtml",
 ]
 

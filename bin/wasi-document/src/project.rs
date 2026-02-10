@@ -11,7 +11,12 @@ pub struct Configuration {
 impl Configuration {
     pub fn load(args: &super::Args) -> Result<Self, Box<dyn std::error::Error>> {
         let default_cfg = || PathBuf::from("./WasiDocument.toml");
-        let base = args.project.clone().unwrap_or_else(default_cfg);
+
+        let base = match args {
+            super::Args::Rebuild { project, .. } | super::Args::Build { project, .. } => {
+                project.clone().unwrap_or_else(default_cfg)
+            }
+        };
 
         let Project {
             mut document,

@@ -1,6 +1,7 @@
 use core::{error::Error, ops};
 use std::borrow::Cow;
 
+use html_and_tar::TarHeader;
 use lithtml::{Dom, Node};
 
 pub struct Structure {
@@ -20,6 +21,16 @@ pub struct TagSpan {
 pub struct SourceCharacter {
     pub line: usize,
     pub column: usize,
+}
+
+/// A Wasi Document file node extracted from HTML DOM.
+///
+/// Basically the data passed as the root FS in stage 1 but in Rust. Can be used to rebuild a file
+/// into tar structure when it was mangled due to intermediate HTML transformations.
+#[derive(Clone)]
+pub struct TarFile {
+    pub header: TarHeader,
+    pub content: Vec<u8>,
 }
 
 pub struct SourceDocument<'text> {
@@ -186,6 +197,50 @@ fn parse_tar_tags(source: &mut SourceDocument) -> Result<Structure, Box<dyn Erro
     })
 }
 
+fn parse_file_elements<'dom: 'a, 'a>(
+    dom: &'dom Dom<'a>,
+) -> Result<Vec<(TarHeader, &'dom Node<'a>)>, Box<dyn Error>> {
+    let mut nodes = vec![];
+
+    // This is a visitor and short-circuits for elements we find uninteresting. Just never return
+    // anything so the iteration visits every node.
+    let _ = find_element(&dom, |node| {
+        let el = node
+            .element()
+            .or_else(|| {
+                eprintln!("Found non-element node {node:?}, skipping");
+                None
+            })
+            .inspect(|el| {
+                eprintln!("Found dom element with name `{}`", el.name);
+            })
+            .filter(|el| el.name.to_lowercase() == "template")?;
+
+        eprintln!("Found template element");
+
+        let given_name = el.attributes.get("data-wahtml_id")?;
+        let given_name = given_name.as_deref()?;
+        let given_name = given_name.trim_matches('\0');
+        eprintln!("Found file node with name `{given_name}`");
+
+        let header = el.attributes.get("data-b")?;
+        let header = header.as_deref()?;
+
+        let mut bytes = [0u8; 512];
+        bytes[100..].copy_from_slice(header.as_bytes());
+
+        let mut header = TarHeader::EMPTY;
+        header.assign_from_bytes(&bytes);
+        header.name[..given_name.len()].copy_from_slice(given_name.as_bytes());
+
+        nodes.push((header, node));
+
+        None::<()>
+    });
+
+    Ok(nodes)
+}
+
 fn find_element<'a, T>(dom: &'a Dom, mut with: impl FnMut(&'a Node) -> Option<T>) -> Option<T> {
     let mut stack: Vec<_> = dom.children.iter().collect();
 
@@ -195,6 +250,12 @@ fn find_element<'a, T>(dom: &'a Dom, mut with: impl FnMut(&'a Node) -> Option<T>
         }
 
         let children = top.element().into_iter().flat_map(|el| el.children.iter());
+
+        if top.element().is_some_and(|el| el.name == "head") {
+            let el = top.element().unwrap();
+            eprintln!("{}", el.children.len());
+        }
+
         stack.extend(children);
     }
 
@@ -288,6 +349,24 @@ impl<'text> SourceDocument<'text> {
 
     pub fn prepare_tar_structure(&mut self) -> Result<Structure, Box<dyn Error>> {
         parse_tar_tags(self)
+    }
+
+    pub fn tar_contents(&self) -> Result<Vec<TarFile>, Box<dyn Error>> {
+        // FIXME: the parser can not handle this. Unfortunate.
+        let text = self.text.trim_matches('\0');
+        let dom = Dom::parse(text)?;
+        let elements = parse_file_elements(&dom)?;
+
+        let files = elements.into_iter().map(|(header, _node)| {
+            TarFile {
+                header,
+                // FIXME: we need to extract the content from the node, but we
+                // don't have a way to do that yet.
+                content: vec![],
+            }
+        });
+
+        Ok(files.collect())
     }
 }
 

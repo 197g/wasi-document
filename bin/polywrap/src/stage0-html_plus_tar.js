@@ -50,7 +50,7 @@ window.addEventListener('load', async function() {
   global.file_data = {};
 
   for (let el of dataElements) {
-    const givenName = el.getAttribute('_wahtml_id')
+    const givenName = el.getAttribute('data-wahtml_id')
       ?.replaceAll(String.fromCodePoint(0xfffd), '')
       ?.replaceAll(String.fromCodePoint(0), '');
 
@@ -74,7 +74,7 @@ window.addEventListener('load', async function() {
     // browser encoding but since the whole header is encoded as ASCII this is
     // reasonably exactly one byte per char, i.e. in both UTF-8 and UTF-16 the
     // offsets are the same.
-    const file_header = el.getAttribute('__b');
+    const file_header = el.getAttribute('data-b');
 
     // Note we do not attach the DOM element here. We want a clean, pure memory
     // representation of the file system tree here. (That we can send to a
@@ -96,6 +96,7 @@ window.addEventListener('load', async function() {
     });
   }
 
+	console.log(global.file_objects);
   const boot_wasm_bytes = global.file_data[BOOT];
 
   if (boot_wasm_bytes === undefined) {

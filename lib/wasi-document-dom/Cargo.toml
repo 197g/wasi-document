@@ -5,3 +5,4 @@ edition = "2024"
 
 [dependencies]
 lithtml.workspace = true
+html_and_tar.workspace = true

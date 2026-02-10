@@ -11,15 +11,25 @@ use project::Configuration;
 // FIXME: Rethink this as a project setup, i.e. like a `Cargo.toml` file where we can also describe
 // the nature of the machine so that this chooses the stage1, stage2, and other parameters for us.
 #[derive(Parser)]
-struct Args {
-    // Options.
-    /// The path of the configuration file.
-    #[arg(long)]
-    project: Option<PathBuf>,
+enum Args {
+    Build {
+        // Options.
+        /// The path of the configuration file.
+        #[arg(long)]
+        project: Option<PathBuf>,
 
-    /// A file to write the module to, default to a target folder.
-    #[arg(short, long)]
-    out: Option<PathBuf>,
+        /// A file to write the module to, default to a target folder.
+        #[arg(short, long)]
+        out: Option<PathBuf>,
+    },
+    /// Rebuild a tar structure from an HTML document that was modified as a DOM.
+    Rebuild {
+        #[arg(long)]
+        project: Option<PathBuf>,
+
+        #[arg()]
+        file: PathBuf,
+    },
 }
 
 struct Work {
@@ -34,8 +44,14 @@ struct Work {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
     let project = project::Configuration::load(&args)?;
-    let project = build::generate(&project)?;
-    merge_wasm(&project)
+
+    match args {
+        Args::Build { .. } => {
+            let project = build::generate(&project)?;
+            merge_wasm(&project)
+        }
+        Args::Rebuild { file, .. } => rebuild_wasm(&project, file),
+    }
 }
 
 fn merge_wasm(project: &Work) -> Result<(), Box<dyn std::error::Error>> {
@@ -137,6 +153,24 @@ fn merge_wasm(project: &Work) -> Result<(), Box<dyn std::error::Error>> {
         Some(path) => {
             std::fs::write(path, &wasm)?;
         }
+    }
+
+    Ok(())
+}
+
+fn rebuild_wasm(
+    _: &project::Configuration,
+    file: PathBuf,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let source = std::fs::read_to_string(file)?;
+    let source = dom::SourceDocument::new(&source);
+    let files = source.tar_contents()?;
+
+    for wasi_document_dom::TarFile { header, content: _ } in files.iter() {
+        eprintln!(
+            "Files in the document: {:?}",
+            (header.name, header.parse_size())
+        );
     }
 
     Ok(())

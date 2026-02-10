@@ -25,6 +25,7 @@ pub struct TarDecompiler {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub struct TarHeader {
     pub name: [u8; 100],     /*   0 */
     pub mode: [u8; 8],       /* 100 */
@@ -102,15 +103,18 @@ impl TarEngine {
     ///
     /// Must not modify HTML semantics.
     pub fn start_of_file(&mut self, html_head: &[u8], entry_offset: usize) -> InitialEscape {
-        assert!(html_head.len() < 94);
+        let consumed = html_head.len();
+        let html_head = Self::doctype_safe_head(html_head);
+
+        const DATA_ESCAPE: &[u8] = b" data-A=\"";
+        assert!(html_head.len() < 100 - DATA_ESCAPE.len());
         assert_eq!(html_head.last().copied(), Some(b'>'));
 
-        let consumed = html_head.len();
         let all_except_close = html_head.len() - 1;
 
         let mut this = TarHeader::EMPTY;
         this.name[1..][..all_except_close].copy_from_slice(&html_head[..all_except_close]);
-        this.name[1..][all_except_close..][..6].copy_from_slice(b" __A=\"");
+        this.name[1..][all_except_close..][..DATA_ESCAPE.len()].copy_from_slice(DATA_ESCAPE);
         this.typeflag = b'x';
 
         let tail_len = entry_offset.checked_sub(consumed).unwrap();
@@ -139,6 +143,24 @@ impl TarEngine {
         }
     }
 
+    // Our parser, and probably a few others, will only reliably recognize an actual document if
+    // there is a doctype annotation before any other element. Since we add a nul-byte in front of
+    // the actual data we will ensure that we are as explicit as possible.
+    fn doctype_safe_head(head: &[u8]) -> std::borrow::Cow<'_, [u8]> {
+        let has_doctype = String::from_utf8_lossy(head)
+            .to_ascii_lowercase()
+            .contains("<!doctype");
+
+        if has_doctype {
+            std::borrow::Cow::Borrowed(head)
+        } else {
+            let mut owned = Vec::with_capacity(9 + head.len());
+            owned.extend_from_slice(b"<!DOCTYPE html>");
+            owned.extend_from_slice(head);
+            std::borrow::Cow::Owned(owned)
+        }
+    }
+
     fn qualify_name_for_html_attribute(name: &str) -> &str {
         assert!(name.is_ascii(), "Name must be ascii");
 
@@ -157,10 +179,10 @@ impl TarEngine {
         let padding = self.pad_to_fit();
         let data = STANDARD.encode(data).into_bytes();
 
-        const START: &[u8] = b"\0<template class=\"wah_polyglot_data\" __A=\"";
+        const START: &[u8] = b"\0<template class=\"wah_polyglot_data\" data-A=\"";
         const DATA_START: &[u8] = b"\">";
-        const ID: &[u8] = b"\" _wahtml_id=\"";
-        const CONT: &[u8] = b"\" __B=\"";
+        const ID: &[u8] = b"\" data-wahtml_id=\"";
+        const CONT: &[u8] = b"\" data-b=\"";
 
         let mut this = TarHeader::EMPTY;
         this.name[..START.len()].copy_from_slice(START);
@@ -171,9 +193,9 @@ impl TarEngine {
         // FIXME: if we add data into this extended header, we must have real control over that
         // data ensuring it is safe as an HTML attribute—so no quotation marks despite the
         // theoretical arbitrary UTF-8 capabilities. Also we should in this case *not* encode the
-        // `_wahtml_id` attribute into the prefix but instead a replacement attribute which we then
-        // close off and re-open as `_wahtml_id` at the end of the extended header data (probably
-        // smuggling it within a pax `comment` value).
+        // `data-wahtml_id` attribute into the prefix but instead a replacement attribute which we
+        // then close off and re-open as `data-wahtml_id` at the end of the extended header data
+        // (probably smuggling it within a pax `comment` value).
         this.prefix[end_start..].copy_from_slice(ID);
         this.assign_checksum();
         self.len += core::mem::size_of::<TarHeader>() as u64;
@@ -245,10 +267,10 @@ impl TarEngine {
     ) -> EscapedData {
         let padding = self.pad_to_fit();
 
-        const START: &[u8] = b"\0</template><template class=\"wah_polyglot_data\" __A=\"";
+        const START: &[u8] = b"\0</template><template class=\"wah_polyglot_data\" data-A=\"";
         const DATA_START: &[u8] = b"\">";
-        const ID: &[u8] = b"\" _wahtml_id=\"";
-        const CONT: &[u8] = b"\" __B=\"";
+        const ID: &[u8] = b"\" data-wahtml_id=\"";
+        const CONT: &[u8] = b"\" data-B=\"";
 
         let mut this = TarHeader::EMPTY;
         this.name[..START.len()].copy_from_slice(START);
@@ -487,7 +509,7 @@ impl TarHeader {
         self.size.copy_from_slice(bytes.as_bytes());
     }
 
-    fn parse_size(&self) -> Result<u64, core::num::ParseIntError> {
+    pub fn parse_size(&self) -> Result<u64, core::num::ParseIntError> {
         if self.size[0] == b'\0' {
             return Ok(0);
         };
@@ -498,7 +520,7 @@ impl TarHeader {
         u64::from_str_radix(size_str, 8)
     }
 
-    const EMPTY: Self = TarHeader {
+    pub const EMPTY: Self = TarHeader {
         name: [0; 100],
         mode: [0; 8],
         uid: [0; 8],
