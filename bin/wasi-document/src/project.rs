@@ -48,7 +48,6 @@ pub struct Project {
 #[serde(rename_all = "kebab-case")]
 pub struct Document {
     pub index_html: PathBuf,
-    pub init: PathBuf,
     pub root: Option<PathBuf>,
 }
 
@@ -63,7 +62,6 @@ pub struct Machine {
 impl Document {
     pub fn absolute_paths(&mut self, base: &Path) {
         self.index_html = base.join(&self.index_html);
-        self.init = base.join(&self.init);
         if let Some(root) = &mut self.root {
             *root = base.join(&root);
         }

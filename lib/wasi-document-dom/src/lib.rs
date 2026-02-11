@@ -48,6 +48,7 @@ fn parse_tar_tags(source: &mut SourceDocument) -> Result<Structure, Box<dyn Erro
     loop {
         let text = source.text.trim_matches('\0');
         dom = Dom::parse(text)?;
+        clean_start_of_file(&mut dom);
 
         let pre_html = find_element(&dom, |node| {
             node.element().filter(|el| el.name.to_lowercase() == "html")
@@ -252,6 +253,14 @@ fn parse_file_elements<'dom: 'a, 'a>(
     Ok(nodes)
 }
 
+// When Chromium saves a file it will leave comments between the doctype and the <html> tag.
+fn clean_start_of_file(dom: &mut Dom) {
+    dom.children
+        .extract_if(.., |node| !matches!(node, Node::Element(_)))
+        .fuse()
+        .count();
+}
+
 fn find_element<'a, T>(dom: &'a Dom, mut with: impl FnMut(&'a Node) -> Option<T>) -> Option<T> {
     let mut stack: Vec<_> = dom.children.iter().collect();
 
@@ -409,11 +418,21 @@ impl<'text> SourceDocument<'text> {
 
         let files = files.collect();
 
-        // Now clean that data from our DOM, make it into an original document..
-        if let Some(html) = dom.children.first_mut() {
-            if let lithtml::Node::Element(el) = html {
-                el.attributes.remove("data-a");
-            }
+        // Now clean that data from our DOM, make it into an original document.. There may be
+        // comments and text between the doctype and the <html> tag.
+        if let Some(html) = dom
+            .children
+            .iter_mut()
+            .filter_map(|node| {
+                if let lithtml::Node::Element(el) = node {
+                    Some(el)
+                } else {
+                    None
+                }
+            })
+            .nth(0)
+        {
+            html.attributes.remove("data-a");
         };
 
         find_element_mut(&mut dom, |node| {
