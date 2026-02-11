@@ -1,5 +1,6 @@
 mod build;
 mod project;
+mod tar;
 
 use std::{ffi::CStr, io::Write as _, path::PathBuf};
 
@@ -59,94 +60,57 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn merge_wasm(project: &Work) -> Result<(), Box<dyn std::error::Error>> {
     let source = std::fs::read_to_string(&project.index_html)?;
-    let bootable = finalize_wasm(&project.kernel, &project.stage2, project)?;
+    let bootable = finalize_kernel_wasm(&project.kernel, &project.stage2, project)?;
 
     let mut source = dom::SourceDocument::new(&source);
     let source_script = minify_js(include_bytes!("stage0-html_plus_tar.js"));
 
-    let structure = source.prepare_tar_structure()?;
+    let wasm = tar::build(
+        &mut source,
+        |push| {
+            push(tar::TarItem::Entry(html_and_tar::Entry {
+                name: "boot/init",
+                data: &bootable,
+            }));
 
-    let mut engine = html_and_tar::TarEngine::default();
-    let mut seq_of_bytes: Vec<&[u8]> = vec![];
+            push(tar::TarItem::Entry(html_and_tar::Entry {
+                name: "boot/wah-init.wasm",
+                data: &bootable,
+            }));
 
-    let mut head_span = source.span(structure.html_tag);
-    head_span.end = head_span.start + structure.html_insertion_point;
-    head_span.start = 0;
+            if let Some(root) = &project.root_fs {
+                let iter = walkdir::WalkDir::new(root).same_file_system(true);
 
-    let head = &source[head_span];
-    let where_to_insert = source.span(structure.insertion_tag);
-    let where_to_enter = source.span(structure.stage0);
+                for entry in iter {
+                    let entry = entry?;
 
-    assert!(where_to_insert.end < where_to_enter.start);
+                    let full_path = entry.path();
+                    let meta = entry.metadata()?;
 
-    let init = engine.start_of_file(head.as_bytes(), where_to_insert.start);
-    seq_of_bytes.push(init.header.as_bytes());
-    seq_of_bytes.push(init.extra.as_slice());
-    seq_of_bytes.push(source[init.consumed..where_to_insert.start].as_bytes());
+                    let Ok(path) = full_path.strip_prefix(&root) else {
+                        continue;
+                    };
 
-    let mut pushed_data = vec![];
+                    let Some(name) = path.to_str() else {
+                        continue;
+                    };
 
-    pushed_data.push(engine.escaped_insert_base64(html_and_tar::Entry {
-        name: "boot/init",
-        data: &bootable,
-    }));
+                    if !meta.is_file() {
+                        continue;
+                    }
 
-    pushed_data.push(engine.escaped_continue_base64(html_and_tar::Entry {
-        name: "boot/wah-init.wasm",
-        data: &bootable,
-    }));
-
-    if let Some(root) = &project.root_fs {
-        let iter = walkdir::WalkDir::new(root).same_file_system(true);
-
-        for entry in iter {
-            let entry = entry?;
-
-            let full_path = entry.path();
-            let meta = entry.metadata()?;
-
-            let Ok(path) = full_path.strip_prefix(&root) else {
-                continue;
-            };
-
-            let Some(name) = path.to_str() else {
-                continue;
-            };
-
-            if !meta.is_file() {
-                continue;
+                    let data = std::fs::read(&full_path)?;
+                    push(tar::TarItem::Entry(html_and_tar::Entry {
+                        name,
+                        data: &data,
+                    }));
+                }
             }
 
-            let data = std::fs::read(&full_path)?;
-
-            let entry = engine.escaped_continue_base64(html_and_tar::Entry { name, data: &data });
-
-            pushed_data.push(entry);
-        }
-    }
-
-    for data in &pushed_data {
-        seq_of_bytes.push(data.padding);
-        seq_of_bytes.push(data.header.as_bytes());
-        seq_of_bytes.push(data.file.as_bytes());
-        seq_of_bytes.push(data.data.as_slice());
-    }
-
-    // FIXME: not sure if we should just do the open-end thing instead of EOF..
-
-    let eof = engine.escaped_eof();
-    seq_of_bytes.push(eof.padding);
-    seq_of_bytes.push(eof.header.as_bytes());
-    seq_of_bytes.push(eof.file.as_bytes());
-    seq_of_bytes.push(eof.data.as_slice());
-
-    seq_of_bytes.push(source[where_to_insert.end..where_to_enter.start].as_bytes());
-    seq_of_bytes.push(b"<script id=WAH_POLYGLOT_HTML_PLUS_TAR_STAGE0>");
-    seq_of_bytes.push(&source_script);
-    seq_of_bytes.push(b"</script>");
-    seq_of_bytes.push(source[where_to_enter.end..].as_bytes());
-
-    let wasm = seq_of_bytes.join(&b""[..]);
+            Ok::<_, Box<dyn std::error::Error>>(())
+        },
+        Some(&source_script),
+    )?;
 
     match &project.out {
         None => {
@@ -166,68 +130,26 @@ fn rebuild_wasm(project: &Work, file: PathBuf) -> Result<(), Box<dyn std::error:
 
     let mut source = dom::SourceDocument::new(&source);
     let files = source.split_tar_contents()?;
+    let files = files.iter().flat_map(|file| {
+        let wasi_document_dom::TarFile { header, content } = file;
+        let cstr = CStr::from_bytes_until_nul(&header.name).ok()?;
+        Some(html_and_tar::Entry {
+            name: cstr.to_str().ok()?,
+            data: content,
+        })
+    });
 
-    let structure = source.prepare_tar_structure()?;
+    let wasm = tar::build(
+        &mut source,
+        move |push| {
+            for file in files {
+                push(tar::TarItem::Entry(file));
+            }
 
-    let mut engine = html_and_tar::TarEngine::default();
-    let mut seq_of_bytes: Vec<&[u8]> = vec![];
-
-    let mut head_span = source.span(structure.html_tag);
-    head_span.end = head_span.start + structure.html_insertion_point;
-    head_span.start = 0;
-
-    let head = &source[head_span];
-    let where_to_insert = source.span(structure.insertion_tag);
-    let where_to_enter = source.span(structure.stage0);
-
-    assert!(where_to_insert.end < where_to_enter.start);
-
-    let init = engine.start_of_file(head.as_bytes(), where_to_insert.start);
-    seq_of_bytes.push(init.header.as_bytes());
-    seq_of_bytes.push(init.extra.as_slice());
-    seq_of_bytes.push(source[init.consumed..where_to_insert.start].as_bytes());
-
-    let mut pushed_data = vec![];
-    let mut insert_with = if false {
-        // Force coercion and unification to a function pointer here already.
-        html_and_tar::TarEngine::escaped_continue_base64
-    } else {
-        html_and_tar::TarEngine::escaped_insert_base64
-    };
-
-    for wasi_document_dom::TarFile { header, content } in files.iter() {
-        let cstr = CStr::from_bytes_until_nul(&header.name).unwrap();
-        let entry = insert_with(
-            &mut engine,
-            html_and_tar::Entry {
-                name: &cstr.to_string_lossy(),
-                data: content,
-            },
-        );
-
-        insert_with = html_and_tar::TarEngine::escaped_continue_base64;
-        pushed_data.push(entry);
-    }
-
-    for entry in &pushed_data {
-        seq_of_bytes.push(entry.padding);
-        seq_of_bytes.push(entry.header.as_bytes());
-        seq_of_bytes.push(entry.file.as_bytes());
-        seq_of_bytes.push(entry.data.as_slice());
-    }
-
-    let eof = engine.escaped_eof();
-    seq_of_bytes.push(eof.padding);
-    seq_of_bytes.push(eof.header.as_bytes());
-    seq_of_bytes.push(eof.file.as_bytes());
-    seq_of_bytes.push(eof.data.as_slice());
-
-    seq_of_bytes.push(source[where_to_insert.end..where_to_enter.start].as_bytes());
-    // Insert the original script unchanged but this could be used to update it.
-    seq_of_bytes.push(source[where_to_enter.start..where_to_enter.end].as_bytes());
-    seq_of_bytes.push(source[where_to_enter.end..].as_bytes());
-
-    let wasm = seq_of_bytes.join(&b""[..]);
+            Ok::<_, Box<dyn std::error::Error>>(())
+        },
+        None,
+    )?;
 
     match &project.out {
         None => {
@@ -242,7 +164,11 @@ fn rebuild_wasm(project: &Work, file: PathBuf) -> Result<(), Box<dyn std::error:
     Ok(())
 }
 
-fn finalize_wasm(
+/// The kernel is also the bootloader module. (Maybe not a good idea?).
+///
+/// Anyways it must contain custom sections with all the customization options from stage1's target
+/// onwards. (stage0 gets the boot module's bytes from the file list, stage1 interprets it).
+fn finalize_kernel_wasm(
     wasm: &[u8],
     stage2: &[u8],
     args: &Work,

@@ -48,6 +48,7 @@ fn parse_tar_tags(source: &mut SourceDocument) -> Result<Structure, Box<dyn Erro
     loop {
         let text = source.text.trim_matches('\0');
         dom = Dom::parse(text)?;
+        clean_start_of_file(&mut dom);
 
         let pre_html = find_element(&dom, |node| {
             node.element().filter(|el| el.name.to_lowercase() == "html")
@@ -206,18 +207,36 @@ fn parse_file_elements<'dom: 'a, 'a>(
     // This is a visitor and short-circuits for elements we find uninteresting. Just never return
     // anything so the iteration visits every node.
     let _ = find_element(&dom, |node| {
-        let el = node.element().filter(|el| {
-            el.name.to_lowercase() == "template"
-                && el.classes.contains(&Cow::Borrowed("wah_polyglot_data"))
-        })?;
+        let el = node
+            .element()
+            .filter(|el| el.classes.contains(&Cow::Borrowed("wah_polyglot_data")))?;
 
         // FIXME: this is extra brittle because it is case-sensitive!!
         let given_name = el.attributes.get("data-wahtml_id")?;
         let given_name = given_name.as_deref()?;
+
+        // Cleanup  replacement characters if they exist.
+        let given_name = given_name
+            .replace('\u{fffd}', "\0")
+            .replace("&#65533;", "\0");
         let given_name = given_name.trim_matches('\0');
 
+        if given_name.len() > 100 {
+            eprintln!("Warning: file element has too long name, file ignored");
+            return None;
+        }
+
         let header = el.attributes.get("data-b")?;
-        let header = header.as_deref()?.as_bytes();
+        let header = header.as_deref()?;
+
+        // Same treatment as the name attribute.
+        let header = header.replace('\u{fffd}', "\0").replace("&#65533;", "\0");
+        let header = header.as_bytes();
+
+        if header.len() > 412 {
+            eprintln!("Warning: file element has too long header, file ignored");
+            return None;
+        }
 
         let mut bytes = [0u8; 512];
         bytes[100..][..header.len()].copy_from_slice(header);
@@ -232,6 +251,14 @@ fn parse_file_elements<'dom: 'a, 'a>(
     });
 
     Ok(nodes)
+}
+
+// When Chromium saves a file it will leave comments between the doctype and the <html> tag.
+fn clean_start_of_file(dom: &mut Dom) {
+    dom.children
+        .extract_if(.., |node| !matches!(node, Node::Element(_)))
+        .fuse()
+        .count();
 }
 
 fn find_element<'a, T>(dom: &'a Dom, mut with: impl FnMut(&'a Node) -> Option<T>) -> Option<T> {
@@ -370,7 +397,16 @@ impl<'text> SourceDocument<'text> {
                 .find_map(|child| child.text())
                 .expect("<template> file element has no text child?");
 
-            let bytes = text.trim_matches('\0').as_bytes();
+            // See `html_and_tar`, the browser might have inserted line breaks by itself while
+            // saving. This cleans them up, there's no risk we have bad base64 data from this..
+            let text = text
+                .replace('\u{fffd}', "\0")
+                .replace("&#65533;", "\0")
+                .replace('\r', "")
+                .replace('\n', "");
+
+            let bytes = text.trim_matches('\0').trim().as_bytes();
+
             let content = match TarDecompiler::file_data(&header, bytes) {
                 ParsedFileData::Data(content) => content,
                 // In fact not a file element.
@@ -382,11 +418,21 @@ impl<'text> SourceDocument<'text> {
 
         let files = files.collect();
 
-        // Now clean that data from our DOM, make it into an original document..
-        if let Some(html) = dom.children.first_mut() {
-            if let lithtml::Node::Element(el) = html {
-                el.attributes.remove("data-A");
-            }
+        // Now clean that data from our DOM, make it into an original document.. There may be
+        // comments and text between the doctype and the <html> tag.
+        if let Some(html) = dom
+            .children
+            .iter_mut()
+            .filter_map(|node| {
+                if let lithtml::Node::Element(el) = node {
+                    Some(el)
+                } else {
+                    None
+                }
+            })
+            .nth(0)
+        {
+            html.attributes.remove("data-a");
         };
 
         find_element_mut(&mut dom, |node| {
@@ -394,7 +440,6 @@ impl<'text> SourceDocument<'text> {
                 el.children.retain(|child| {
                     child
                         .element()
-                        .filter(|el| el.name.to_lowercase() == "template")
                         .filter(|el| el.classes.contains(&Cow::Borrowed("wah_polyglot_data")))
                         .is_none()
                 })

@@ -20,18 +20,39 @@
 let __wah_stage0_global = {};
 const BOOT = 'boot/wah-init.wasm';
 
-function b64_decode(b64) {
-  const buffer = new ArrayBuffer((b64.length / 4) * 3 - b64.match(/=*$/)[0].length);
-  const IDX_STR = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/="
+function b64_decode(b64, options={}) {
+  // Effectively a static, since calls share the default argument object.
+  if (options.tr === undefined) {
+    const IDX_STR = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/="
+    options.tr = new Uint8Array(256);
+
+    // Note `=` translates to 0o100
+    for (let i = 0; i <= 64; i++) {
+      options.tr[IDX_STR.charCodeAt(i)] = i;
+    }
+  }
+
+  // Performance note: `/=*$/` is actually awfully slow (trace has some 164ms! for 256kb). So we only use it if we have to.
+  let mk_buffer = undefined;
+  // Overfull padding?
+  if (b64.charAt(b64.length - 3) === '=') {
+    mk_buffer = (b64.length / 4) * 3 - b64.match(/=*$/)[0].length;
+  } else {
+    mk_buffer = (b64.length / 4) * 3 - (b64.charAt(b64.length - 2) === '=' ? 2 : b64.charAt(b64.length - 1) == '=' ? 1 : 0);
+
+  }
+
+  const buffer = new ArrayBuffer(mk_buffer);
   const view = new Uint8Array(buffer);
+  const tr = options.tr;
 
   let i = 0;
   let j = 0;
   for (; j < b64.length;) {
-    let a = IDX_STR.indexOf(b64.charAt(j++));
-    let b = IDX_STR.indexOf(b64.charAt(j++));
-    let c = IDX_STR.indexOf(b64.charAt(j++));
-    let d = IDX_STR.indexOf(b64.charAt(j++));
+    let a = tr[b64.charCodeAt(j++)] || 0;
+    let b = tr[b64.charCodeAt(j++)] || 0;
+    let c = tr[b64.charCodeAt(j++)] || 0;
+    let d = tr[b64.charCodeAt(j++)] || 0;
 
     view[i++] = (a << 2) | (b >> 4);
     if (c < 64) view[i++] = ((b & 0xf) << 4) | (c >> 2);
@@ -57,16 +78,27 @@ window.addEventListener('load', async function() {
     if (givenName === null) {
       continue;
     }
-    // NOTE: usually we `firstChild.textContent`. But for reasons unknown to me
-    // at the moment of writing this truncates the resulting string to a clean
-    // 1<<16 bytes instead of retaining the full encoding; in Chromium browsers
-    // but not in Firefox.
+
+    // NOTE: An observation from a previous <template> approach: usually we
+    // `firstChild.textContent`. But for reasons unknown to me at the moment of
+    // writing this truncates the resulting string to a clean 1<<16 bytes
+    // instead of retaining the full encoding; in Chromium browsers but not in
+    // Firefox.
     // NOTE: now being more knowledgable, it's probably that the content
     // already is a pure text node. So its first child attribute is probably
     // synthetic and there's some encoding roundtrip which mangles it. Eh. This
     // is fine if it works and we do control the encoding side as well.
-    const b64 = el.content.textContent;
-    const raw_content = b64_decode(b64);
+
+    // Note: A replace /[..]*$/ is slow. We know that there is at most 512
+    // padding inserted behind it and then we will find the end element. To be
+    // safe, consider another header and do a replace on a constant maximum
+    // length of at most 1 << 12 characters. (That is, in case this is the last
+    // file before an EOF we will find two consecutive zeroed headers before
+    // the closing tag, plus alignment. Just round that up to 4 blocks).
+    let b64content = el.textContent.replace(/^[^0-9a-zA-Z+\/]*/, "");
+    let trimBack = b64content.slice(-2048, b64content.length).replace(/^[0-9a-zA-Z+\/=]*/, "").length;
+    b64content = b64content.slice(0, -trimBack);
+    const raw_content = b64_decode(b64content);
     global.file_data[givenName] = raw_content;
 
     // The `TarHeader` contents except for the name (first field), so at an
@@ -75,6 +107,11 @@ window.addEventListener('load', async function() {
     // reasonably exactly one byte per char, i.e. in both UTF-8 and UTF-16 the
     // offsets are the same.
     const file_header = el.getAttribute('data-b');
+
+    if (b64content.length != parseInt(file_header.slice(24, 36), 8)) {
+      console.log(givenName, el);
+      throw 'Bad file';
+    }
 
     // Note we do not attach the DOM element here. We want a clean, pure memory
     // representation of the file system tree here. (That we can send to a

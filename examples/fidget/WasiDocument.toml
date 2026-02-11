@@ -1,7 +1,6 @@
 [Document]
 index-html = "index.html"
-init = "bin/fidget-cli-opt.wasm"
-root = "root"
+filesystem-root = "root"
 
 [Machine]
 stage2 = { flavor = "node", workdir = "../../stage2-loader", build = "build.mjs" }
