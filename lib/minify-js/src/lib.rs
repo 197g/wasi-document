@@ -16,6 +16,10 @@ fn minify(source_type: oxc_span::SourceType, code: &[u8]) -> Vec<u8> {
     let allocator = Allocator::default();
     let mut parsed = Parser::new(&allocator, code, source_type).parse();
 
+    if !parsed.errors.is_empty() {
+        panic!("Parsing errors: {:#?}", parsed.errors);
+    }
+
     let options = MinifierOptions::default();
     let minifier = Minifier::new(options);
     let minified = minifier.minify(&allocator, &mut parsed.program);

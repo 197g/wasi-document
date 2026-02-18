@@ -113,7 +113,7 @@ window.addEventListener('load', async function() {
     let blob = new Blob([stage1], { type: 'application/javascript' });
     let blobURL = URL.createObjectURL(blob);
     let module = (await import(blobURL));
-    console.debug('Wasm-As-HTML bootstrapping stage-0: handoff');
+    console.debug('Wasm-As-HTML bootstrapping stage-0: handoff', module);
     await module.default(boot_wasm_bytes, wasm, global.file_objects);
   } catch (e) {
     console.error('Wasm-As-HTML failed to initialized', global, e);

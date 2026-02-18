@@ -40,6 +40,7 @@ mod bytemuck {
 #[derive(Default)]
 pub struct TarEngine {
     len: u64,
+    is_escaped: bool,
 }
 
 #[derive(Default)]
@@ -77,7 +78,7 @@ pub struct Entry<'la> {
     pub data: &'la [u8],
 }
 
-pub struct Sparse<'la> {
+pub struct External<'la> {
     /// An ascii name for this file.
     pub name: &'la str,
     /// The real byte length of the file.
@@ -201,77 +202,20 @@ impl TarEngine {
         name
     }
 
-    pub fn escaped_insert_base64(&mut self, Entry { name, data }: Entry) -> EscapedData {
-        let qualname = Self::qualify_name_for_html_attribute(name);
-
-        let padding = self.pad_to_fit();
-        let data = STANDARD.encode(data).into_bytes();
-
-        const START: &[u8] = b"\0<noscript type=none class=\"wah_polyglot_data\" data-a=\"";
-        const DATA_START: &[u8] = b"\">";
-        const ID: &[u8] = b"\" data-wahtml_id=\"";
-        const CONT: &[u8] = b"\" data-b=\"";
-
-        let mut this = TarHeader::EMPTY;
-        this.name[..START.len()].copy_from_slice(START);
-        this.typeflag = b'x';
-        this.assign_size(0);
-        this.assign_permission_encoding_meta();
-        let end_start = this.prefix.len() - ID.len();
-        // FIXME: if we add data into this extended header, we must have real control over that
-        // data ensuring it is safe as an HTML attribute—so no quotation marks despite the
-        // theoretical arbitrary UTF-8 capabilities. Also we should in this case *not* encode the
-        // `data-wahtml_id` attribute into the prefix but instead a replacement attribute which we
-        // then close off and re-open as `data-wahtml_id` at the end of the extended header data
-        // (probably smuggling it within a pax `comment` value).
-        this.prefix[end_start..].copy_from_slice(ID);
-        this.assign_checksum();
-        self.len += core::mem::size_of::<TarHeader>() as u64;
-
-        let mut file = TarHeader::EMPTY;
-        let end_start = this.prefix.len() - DATA_START.len();
-        file.name[..qualname.len()].copy_from_slice(qualname.as_bytes());
-
-        // We place the closing quotation for the HTML attribute covering the file name at the end
-        // of this field. This does not influence the Tar interpretation (nul-byte is already
-        // present) but the wrapping of the rest of the header is then aligned consistently. The
-        // HTML attribute is then closed offset in the last standard field `prefix`.
-        let cont_place = &mut file.name[qualname.len()..][1..];
-        let cont_idx = cont_place.len() - CONT.len();
-        cont_place[cont_idx..].copy_from_slice(CONT);
-        file.prefix[end_start..].copy_from_slice(DATA_START);
-
-        file.assign_size(data.len());
-        file.assign_permission_encoding_meta();
-        file.assign_checksum();
-
-        self.len += core::mem::size_of::<TarHeader>() as u64;
-
-        // Followed by the data.
-        self.len += data.len() as u64;
-
-        EscapedData {
-            padding,
-            header: this,
-            file,
-            data,
-        }
-    }
-
-    pub fn escaped_continue_base64(&mut self, Entry { name, data }: Entry) -> EscapedData {
+    pub fn escaped_base64(&mut self, Entry { name, data }: Entry) -> EscapedData {
         let qualname = Self::qualify_name_for_html_attribute(name);
         let data = STANDARD.encode(data).into_bytes();
 
         self.continue_qualified(qualname, data, |_, _| {})
     }
 
-    pub fn escaped_continue_sparse(
+    pub fn escaped_external(
         &mut self,
-        Sparse {
+        External {
             name,
             realsize,
             reference,
-        }: Sparse,
+        }: External,
     ) -> EscapedData {
         let qualname = Self::qualify_name_for_html_attribute(name);
         let qualref = Self::qualify_name_for_html_attribute(reference);
@@ -295,14 +239,25 @@ impl TarEngine {
     ) -> EscapedData {
         let padding = self.pad_to_fit();
 
-        const START: &[u8] =
+        // How to start our extension header for a new escape.
+        const START_NAME: &[u8] = b"\0<noscript type=none class=\"wah_polyglot_data\" data-a=\"";
+        // How to name our extension header for a continued escape.
+        const CONT_NAME: &[u8] =
             b"\0</noscript><noscript type=none class=\"wah_polyglot_data\" data-a=\"";
-        const DATA_START: &[u8] = b"\">";
+
         const ID: &[u8] = b"\" data-wahtml_id=\"";
-        const CONT: &[u8] = b"\" data-b=\"";
+        const ID_END_CONT: &[u8] = b"\" data-b=\"";
+        const DATA_START: &[u8] = b"\">";
+
+        let start = if self.is_escaped {
+            CONT_NAME
+        } else {
+            self.is_escaped = true;
+            START_NAME
+        };
 
         let mut this = TarHeader::EMPTY;
-        this.name[..START.len()].copy_from_slice(START);
+        this.name[..start.len()].copy_from_slice(start);
         this.typeflag = b'x';
         this.assign_size(0);
         this.assign_permission_encoding_meta();
@@ -319,8 +274,8 @@ impl TarEngine {
         // present) but the wrapping of the rest of the header is then aligned consistently. The
         // HTML attribute is then closed offset in the last standard field `prefix`.
         let cont_place = &mut file.name[qualname.len()..][1..];
-        let cont_idx = cont_place.len() - CONT.len();
-        cont_place[cont_idx..].copy_from_slice(CONT);
+        let cont_idx = cont_place.len() - ID_END_CONT.len();
+        cont_place[cont_idx..].copy_from_slice(ID_END_CONT);
         file.prefix[end_start..].copy_from_slice(DATA_START);
 
         file.assign_size(data.len());
@@ -346,7 +301,9 @@ impl TarEngine {
     /// End a sequence of escaped data, with a particular skip of raw HTML bytes to follow until
     /// the next blocks of such data (again starting as `escaped_insert_base64`).
     pub fn escaped_end(&mut self, skip: usize) -> EscapedSentinel {
+        assert!(self.is_escaped);
         let padding = self.pad_to_fit();
+
         const START: &[u8] = b"\0</noscript><noscript type=none>";
         const END: &[u8] = b"\0</noscript>";
 
@@ -357,6 +314,8 @@ impl TarEngine {
         this.assign_permission_encoding_meta();
         this.assign_checksum();
 
+        self.is_escaped = false;
+
         EscapedSentinel {
             padding,
             header: this,
@@ -365,6 +324,14 @@ impl TarEngine {
 
     /// End a sequence of escaped data with a tar EOF.
     pub fn escaped_eof(&mut self) -> EscapedData {
+        if self.is_escaped {
+            self.inner_escaped_eof()
+        } else {
+            self.inner_insert_eof()
+        }
+    }
+
+    fn inner_escaped_eof(&mut self) -> EscapedData {
         EscapedData {
             padding: self.pad_to_fit(),
             header: TarHeader::EMPTY,
@@ -373,8 +340,12 @@ impl TarEngine {
         }
     }
 
-    /// Outside a data escape block, insert a tar EOF marker.
     pub fn insert_eof(&mut self) -> EscapedData {
+        self.escaped_eof()
+    }
+
+    /// Outside a data escape block, insert a tar EOF marker.
+    fn inner_insert_eof(&mut self) -> EscapedData {
         EscapedData {
             padding: self.pad_to_fit(),
             header: TarHeader::EMPTY,

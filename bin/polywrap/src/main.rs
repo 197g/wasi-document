@@ -190,7 +190,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let mut pushed_data = vec![];
 
-            pushed_data.push(engine.escaped_insert_base64(html_and_tar::Entry {
+            pushed_data.push(engine.escaped_base64(html_and_tar::Entry {
                 name: "boot/wah-init.wasm",
                 data: &binary_wasm,
             }));
@@ -214,7 +214,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     file.read_to_end(&mut data)?;
 
                     let entry =
-                        engine.escaped_continue_base64(html_and_tar::Entry { name, data: &data });
+                        engine.escaped_base64(html_and_tar::Entry { name, data: &data });
 
                     pushed_data.push(entry);
                 }
@@ -244,7 +244,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let data = std::fs::read(&full_path)?;
 
                     let entry =
-                        engine.escaped_continue_base64(html_and_tar::Entry { name, data: &data });
+                        engine.escaped_base64(html_and_tar::Entry { name, data: &data });
 
                     pushed_data.push(entry);
                 }

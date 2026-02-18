@@ -69,7 +69,7 @@ async function fallback_shell(configuration, error) {
  * provide any capability you want, the latter allow you to create any hook you
  * want to access those capabilities.
  */
-async function mount({
+async function createSandbox({
   /* A Promise to a Response object that resolves to the WASM kernel module. */
   module_or_path,
   /* An array with the elements of the root FS as a tar-like structure */
@@ -97,21 +97,80 @@ async function mount({
 
   var worker_state = {
     elements: new Map(),
+    reaper: new Map(),
+    fid_counter: 0,
+
+    worker: worker,
+    wasi_stage_url,
+    commands: new Map(), 
+
+    createModuleFromBlob: async (blob, options) => {
+      let dispatch = (await import(blobURL, options));
+      dispatch.default(worker_state);
+    },
+
+    createProcess: function({ stdin, stdout, stderr, reaper }) {
+      const fid = this.fid_counter;
+      this.fid_counter += 1;
+      this.reaper.st(fid, reaper);
+
+      worker.postMessage({
+        createProc: {
+          stdin,
+          stdout: !!stdout,
+          stderr: !!stderr,
+          fid,
+        }
+      });
+    },
   };
 
+
   worker.onmessage = (event) => {
-    /** Important note on event handling: The client references some data
-     * through 'element-handles' which behave like file handles. However note
-     * that the client is responsible for allocating this handles. For the sake
-     * of reuse we must therefore synchronize the effects of element handle
-     * re-assigments with the order of events such that it corresponds to the
-     * client order. The rest of effects may be asynchronous.
-     */
-    if (event.data.error) {
-      const {configuration, error} = event.data.error;
-      fallback_shell(configuration, error)
-    } else if (event.data['element-select']) {
-      const {ed, selectors} = event.data['element-select'];
+    let data = event.data;
+    let transfer = data.transfer || [];
+    delete data.transfer;
+
+    if (Object.keys(data).length != 1) {
+      data = { error: { invalid_message: event } }
+    }
+
+    const [command, value] = Object.entries(data)[0];
+    const handler = worker_state.commands.get(command);
+    if (handler) handler(value, worker_state, { event: event });
+  };
+
+
+  /** Important note on event handling: The client references some data
+   * through 'element-handles' which behave like file handles. However note
+   * that the client is responsible for allocating this handles. For the sake
+   * of reuse we must therefore synchronize the effects of element handle
+   * re-assigments with the order of events such that it corresponds to the
+   * client order. The rest of effects may be asynchronous.
+   */
+  worker_state.commands.set("error", data => {
+    const {configuration, error} = data;
+    fallback_shell(configuration, error)
+  });
+
+  worker_state.commands.set("module", data => {
+    // Kernel sending us modules to run in 'firmware'.
+    const { module, type, options } = data;
+    let blob = new Blob([module.file.data.buffer], { type: type || 'application/javascript' });
+    let blobURL = URL.createObjectURL(blob);
+    worker_state.createModuleFromBlob(blobURL, options);
+  });
+
+  worker_state.commands.set("reap", data => {
+    // Kernel telling us a root process ended.
+    const { stdout, stderr, status, pid, fid } = data;
+    const reaper = worker_state.reaper.get(fid);
+    worker_state.reaper.delete(fid);
+    if(reaper) reaper({ stdout, stderr, status, pid, fid });
+  });
+
+  worker_state.commands.set("element-select", data => {
+      const {ed, selectors} = data;
 
       var element = null;
       for (var selector of selectors) {
@@ -137,27 +196,37 @@ async function mount({
 
       console.log('Opening element descriptor', ed, element);
       worker_state.elements.set(ed, element);
-    } else if (event.data['element-exec']) {
-      const {ed, fn, args, ret} = event.data['element-exec'];
-      const fn_js = (new Function('return '+fn))();
+  });
 
-      const element = worker_state.elements.get(ed);
-      let result = fn_js(element, ...args);
+  worker_state.commands.set("element-exec", data => {
+    const {ed, fn, args, ret} = event.data['element-exec'];
+    const fn_js = (new Function('return '+fn))();
 
-      if (ret) {
-        console.log('Invoked result', ret, result);
-        worker.postMessage({ 'completed': { ed: ret, result: result } });
-      }
-    } else if (event.data['element-insert']) {
-      const {ed, innerHTML} = event.data['element-insert'];
-      console.log(ed, worker_state.elements.get(ed));
-      worker_state.elements.get(ed).innerHTML = innerHTML;
-    } else if (event.data['element-replace']) {
-      const {ed, outerHTML} = event.data['element-replace'];
-      worker_state.elements.get(ed).outerHTML = outerHTML;
-      worker_state.elements.delete(ed);
+    const element = worker_state.elements.get(ed);
+    let result = fn_js(element, ...args);
+
+    if (ret) {
+      console.log('Invoked result', ret, result);
+      worker.postMessage({ 'completed': { ed: ret, result: result } });
     }
-  };
+  });
+
+  worker_state.commands.set("element-insert", data => {
+    const {ed, innerHTML} = data;
+    console.log(ed, worker_state.elements.get(ed));
+    worker_state.elements.get(ed).innerHTML = innerHTML;
+  });
+
+  worker_state.commands.set("element-replace", data => {
+    const {ed, outerHTML} = data;
+    worker_state.elements.get(ed).outerHTML = outerHTML;
+    worker_state.elements.delete(ed);
+  });
+
+  // Remove any DOM element references from the file objects, we don't want to send
+  wasi_root_fs = wasi_root_fs.map(({header, data}) => {
+    return {header: header, data: data}
+  });
 
   worker.postMessage({
     start: {
@@ -471,4 +540,4 @@ async function worker_mount({
   }
 }
 
-export default mount;
+export default createSandbox;

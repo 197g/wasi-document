@@ -228,5 +228,13 @@ fn finalize_kernel_wasm(
 }
 
 fn minify_js(bytes: &[u8]) -> Vec<u8> {
-    wasi_document_minify_js::minify_js(bytes)
+    let minified = wasi_document_minify_js::minify_js(bytes);
+
+    eprintln!(
+        "Minified size: {} bytes from {}",
+        minified.len(),
+        bytes.len()
+    );
+
+    minified
 }

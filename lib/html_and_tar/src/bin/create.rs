@@ -1,7 +1,7 @@
 const HTML: &str = include_str!("example.html");
 use std::{borrow::Cow, io::Write as _};
 
-use html_and_tar::{Entry, Sparse, TarEngine};
+use html_and_tar::{Entry, External, TarEngine};
 
 fn main() {
     const HTMLTAG: &str = "<html";
@@ -28,7 +28,7 @@ fn main() {
     }
 
     {
-        let data = engine.escaped_insert_base64(Entry {
+        let data = engine.escaped_base64(Entry {
             name: "example0",
             data: b"Hello, world!",
         });
@@ -40,7 +40,7 @@ fn main() {
     }
 
     {
-        let data = engine.escaped_continue_sparse(Sparse {
+        let data = engine.escaped_external(External {
             name: "InWonderland",
             realsize: 6,
             reference: "Go ask Alice",
@@ -53,7 +53,7 @@ fn main() {
     }
 
     {
-        let data = engine.escaped_continue_base64(Entry {
+        let data = engine.escaped_base64(Entry {
             name: "Emporingen",
             data: b"Off with their heads",
         });

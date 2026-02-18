@@ -1,8 +1,9 @@
-use html_and_tar::{Entry, TarEngine};
+use html_and_tar::{Entry, External, TarEngine};
 use wasi_document_dom as dom;
 
 pub enum TarItem<'data> {
     Entry(Entry<'data>),
+    External(External<'data>),
 }
 
 pub fn build<E>(
@@ -33,18 +34,14 @@ where
     seq_of_bytes.push(init.extra.as_slice());
     seq_of_bytes.push(source[init.consumed..where_to_insert.start].as_bytes());
 
-    let mut insert_with = if false {
-        // Force coercion and unification to a function pointer here already.
-        html_and_tar::TarEngine::escaped_continue_base64
-    } else {
-        html_and_tar::TarEngine::escaped_insert_base64
-    };
-
     let mut pushed_data = vec![];
+
     (elements)(&mut |item| {
-        let TarItem::Entry(entry) = item;
-        let entry = insert_with(&mut engine, entry);
-        insert_with = html_and_tar::TarEngine::escaped_continue_base64;
+        let entry = match item {
+            TarItem::Entry(entry) => engine.escaped_base64(entry),
+            TarItem::External(external) => engine.escaped_external(external),
+        };
+
         pushed_data.push(entry);
     })?;
 

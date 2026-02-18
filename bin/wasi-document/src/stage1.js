@@ -27,6 +27,26 @@ async function init(bytes, boot_wasm, wasi_root_fs) {
   let blobURL = URL.createObjectURL(blob);
   let stage2_module = (await import(blobURL));
 
+  let delayed_file_promises = [];
+  for (const item of wasi_root_fs) {
+    if (item.header.typeflag == 'S') {
+      // 'Symlink' aka. an external resource.
+      delayed_file_promises.push(async () => {
+        const response = await fetch(item.header.linkname);
+        const data = await respose.toArrayBuffer();
+
+        // Turn this into a Base64 string, we modify the DOM for completeness.
+        const reader = new FileReader();
+        reader.readAsDataURL(new Blob([data]));
+        const data_url_data = reader.result.replace(/^data:.*;base64,/, '');
+
+        el.textContent = data_url_data;
+      })
+    }
+  }
+
+  await Promise.all(delayed_file_promises);
+
   let wasmblob = new Blob([bytes], { type: 'application/wasm' });
   stage2_module.default({
     module_or_path: Promise.resolve(new Response(wasmblob)),
