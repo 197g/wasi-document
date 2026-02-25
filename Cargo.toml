@@ -21,6 +21,7 @@ resolver = "2"
 [workspace.dependencies]
 html_and_tar = { path = "lib/html_and_tar" }
 serde = {version = "1", features = ["derive"] }
+tempfile = "3"
 toml = "0.9"
 wasi-document-dom = { path = "lib/wasi-document-dom" }
 

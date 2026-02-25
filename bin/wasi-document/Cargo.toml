@@ -8,6 +8,7 @@ clap.workspace = true
 html_and_tar.workspace = true
 serde.workspace = true
 serde_json = "1"
+tempfile.workspace = true
 toml.workspace = true
 walkdir = "2.5"
 wasi-document-dom.workspace = true

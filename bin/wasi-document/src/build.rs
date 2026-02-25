@@ -6,20 +6,34 @@ use std::{path, process::Command};
 
 pub fn generate(
     configuration: &super::Configuration,
+    cargo_target_dir: Option<&path::Path>,
 ) -> Result<super::Work, Box<dyn std::error::Error>> {
     let stage2 = run_build(&configuration.machine.stage2)?;
     let stage3 = run_build(&configuration.machine.stage3)?;
 
-    let root_fs = if let Some(root) = &configuration.document.root {
-        root.clone()
-    } else {
-        configuration
-            .document
-            .index_html
-            .parent()
-            .unwrap()
-            .join("root")
+    let mut root_fs = vec![];
+    let mut resources = vec![];
+
+    if let Some(root) = &configuration.document.root {
+        root_fs.push(root.to_path_buf())
     };
+
+    if let Some(root) = &configuration.document.install {
+        let builder = crate::cargo::BuildDir::new(cargo_target_dir.map(path::Path::to_path_buf))?;
+
+        let commands = root
+            .iter()
+            .map(|item| builder.command(item))
+            .collect::<Vec<_>>();
+
+        for mut cmd in commands {
+            let status = cmd.status()?;
+            assert!(status.success());
+        }
+
+        root_fs.push(builder.path_while_alive().to_path_buf());
+        resources.push(Box::new(builder) as Box<dyn std::any::Any>);
+    }
 
     let meta = metadata(path::Path::new("."))?;
 
@@ -28,8 +42,9 @@ pub fn generate(
         stage2: stage2.item,
         kernel: stage3.item,
         edit: false,
-        root_fs: Some(root_fs),
+        root_fs,
         out: Some(meta.target_directory.join("wasi.html")),
+        resources,
     })
 }
 

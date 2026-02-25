@@ -38,20 +38,24 @@ impl Configuration {
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all = "PascalCase")]
+#[serde(rename_all = "PascalCase", deny_unknown_fields)]
 pub struct Project {
     pub document: Document,
     pub machine: Machine,
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct Document {
     pub index_html: PathBuf,
+    #[serde(rename = "filesystem-root")]
     pub root: Option<PathBuf>,
+    #[serde(rename = "Install")]
+    pub install: Option<Vec<Install>>,
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Machine {
     #[serde(deserialize_with = "BuildStage2::deserialize")]
     pub stage2: Build,
@@ -83,6 +87,40 @@ impl Machine {
             }
         }
     }
+}
+
+/// Options that you can control. Binaries are installed at the root of the packed directory, and
+/// the target is always `wasm32-wasip1`.
+#[derive(Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct Install {
+    pub package: String,
+    #[serde(default)]
+    pub bin: Option<String>,
+    #[serde(default = "Install::r#true")]
+    pub default_features: bool,
+    #[serde(default)]
+    pub features: Vec<String>,
+    #[serde(flatten)]
+    pub source: InstallSource,
+}
+
+impl Install {
+    fn r#true() -> bool {
+        true
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "kebab-case", untagged)]
+pub enum InstallSource {
+    Git {
+        git: String,
+        #[serde(default)]
+        rev: Option<String>
+    },
+    Path { path: PathBuf },
+    CratesIo,
 }
 
 #[derive(Debug)]

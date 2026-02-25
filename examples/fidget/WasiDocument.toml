@@ -2,6 +2,11 @@
 index-html = "index.html"
 filesystem-root = "root"
 
+[[Document.Install]]
+git = "https://github.com/mkeeter/fidget"
+package = "fidget-cli"
+default-features = false
+
 [Machine]
 stage2 = { flavor = "node", workdir = "../../stage2-loader", build = "build.mjs" }
 stage3 = { flavor = "rust", package = "wasi-document-unzip", bin = "unzip" }

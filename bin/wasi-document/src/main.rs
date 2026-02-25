@@ -1,4 +1,5 @@
 mod build;
+mod cargo;
 mod project;
 mod tar;
 
@@ -22,6 +23,9 @@ enum Args {
         /// A file to write the module to, default to a target folder.
         #[arg(short, long)]
         out: Option<PathBuf>,
+
+        #[arg(long)]
+        target_dir: Option<PathBuf>,
     },
     /// Rebuild a tar structure from an HTML document that was modified as a DOM.
     Rebuild {
@@ -38,8 +42,12 @@ struct Work {
     stage2: Vec<u8>,
     kernel: Vec<u8>,
     edit: bool,
-    root_fs: Option<PathBuf>,
+    root_fs: Vec<PathBuf>,
     out: Option<PathBuf>,
+
+    /// Objects that guard a resource required for the others (i.e. tempdirs).
+    #[allow(dead_code)]
+    resources: Vec<Box<dyn std::any::Any>>,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -47,12 +55,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let project = project::Configuration::load(&args)?;
 
     match args {
-        Args::Build { .. } => {
-            let project = build::generate(&project)?;
+        Args::Build { target_dir, .. } => {
+            let project = build::generate(&project, target_dir.as_deref())?;
             merge_wasm(&project)
         }
         Args::Rebuild { file, .. } => {
-            let project = build::generate(&project)?;
+            let project = build::generate(&project, None)?;
             rebuild_wasm(&project, file)
         }
     }
@@ -78,7 +86,8 @@ fn merge_wasm(project: &Work) -> Result<(), Box<dyn std::error::Error>> {
                 data: &bootable,
             }));
 
-            if let Some(root) = &project.root_fs {
+            // Note: maybe we want to tag them as by their minor device number?
+            for root in &project.root_fs {
                 let iter = walkdir::WalkDir::new(root).same_file_system(true);
 
                 for entry in iter {
