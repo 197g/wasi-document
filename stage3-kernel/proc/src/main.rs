@@ -19,7 +19,7 @@ fn inner() -> Result<(), zip::result::ZipError> {
         archive.extract("/")?;
     }
 
-    std::fs::write("boot/index.mjs", STAGE3_JS)?;
+    std::fs::write("init.mjs", STAGE3_JS)?;
 
     Ok(())
 }

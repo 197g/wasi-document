@@ -47,6 +47,31 @@ async function fallback_shell(configuration, error) {
   console.log(error);
 }
 
+class Process {
+  #promise;
+  #reject;
+  #resolve;
+
+  constructor() {
+    let p = Promise.withResolvers();
+    this.#promise = p.promise;
+    this.#reject = p.reject;
+    this.#resolve = p.resolve;
+  }
+
+  promise() {
+    return this.#promise;
+  }
+
+  reject(reason) {
+    this.#reject(reason);
+  }
+
+  resolve(value) {
+    this.#resolve(value);
+  }
+}
+
 /** Stage 2 entry point: our goal here is to prepare an environment for the WASM 'kernel' to run.
  *
  * This means in particular we will create a worker and setup its module and a
@@ -98,33 +123,120 @@ async function createSandbox({
   var worker_state = {
     elements: new Map(),
     reaper: new Map(),
-    fid_counter: 0,
+    reaper_logging: new FinalizationRegistry((pid) => {
+      console.warn(`Process ${pid} no longer reapable`);
+    }),
+    fid_counter: 65536,
 
     worker: worker,
     wasi_stage_url,
     commands: new Map(), 
+    promises: [],
 
-    createModuleFromBlob: async (blob, options) => {
-      let dispatch = (await import(blobURL, options));
-      dispatch.default(worker_state);
+    runModuleFromBlob: async (blobURL, options, ed) => {
+      try {
+        let dispatch = (await import(blobURL, options?.import));
+        let result = dispatch.default(worker_state, options);
+        worker.postMessage({ 'completed': { ed: ed, result: result } });
+        ed = undefined;
+      } catch(e) {
+        if (ed) {
+          worker.postMessage({ 'completed': { ed: ed, error: ''+e } });
+        }
+      }
     },
 
-    createProcess: function({ stdin, stdout, stderr, reaper }) {
+    createFirmware: function(promise) {
+      worker_state.reaper_logging.insert(promise, 'firmware');
+      worker_state.promises.push(promise);
+    },
+
+    // Return a promise that resolves when the process with the given configuration is reaped.
+    createProcess: function({ stdin, stdout, stderr, env, args }) {
+      function mk_output(obj) {
+        if (obj == undefined) {
+          return { null: true };
+        }
+
+        if (Object.keys(obj).length != 1) {
+          throw { error: { bad_io_binding: obj } };
+        }
+
+        if (obj.pipe) {
+          const { pipe } = obj;
+          return { pipe: !!pipe };
+        } else if (obj.file) {
+          const { file } = obj;
+          return { file: ''+file };
+        } else if (obj.null) {
+          return { null: true };
+        }
+
+        throw { error: { unknown_io_binding: obj } };
+      }
+
+      function mk_input(obj) {
+        if (obj == undefined) {
+          return { null: true };
+        }
+
+        if (Object.keys(obj).length != 1) {
+          throw { error: { bad_io_binding: obj } };
+        }
+
+        if (obj.file) {
+          const { file } = obj;
+          return { file: ''+file };
+        } else if (obj.null) {
+          return { null: true };
+        }
+
+        throw { error: { unknown_io_binding: obj } };
+      }
+
       const fid = this.fid_counter;
       this.fid_counter += 1;
-      this.reaper.st(fid, reaper);
+      let reaper = this._create_reaper(fid);
 
       worker.postMessage({
-        createProc: {
-          stdin,
-          stdout: !!stdout,
-          stderr: !!stderr,
+        'create-proc': {
+          stdin: mk_input(stdin),
+          stdout: mk_output(stdout),
+          stderr: mk_output(stderr),
+          env: env?.map(e => ''+e),
+          args: args?.map(e => ''+e),
           fid,
         }
       });
-    },
-  };
 
+      return reaper;
+    },
+
+    _create_reaper: function(fid) {
+      const result = new Process();
+      result.fid = fid;
+      this.reaper.set(fid, (result));
+      this.reaper_logging.register(result, fid); 
+      // TODO: maybe we wrap this object? You must access `.promise` here.
+      return result;
+    },
+
+    init_proc(id) {
+      if (id > 65535) throw 'Not an init process';
+      // Unlike other processes, since we did not spawn these ourselves there
+      // may be no promise for them. FIXME: should the kernel tell us how many
+      // there are as part of startup?
+      let fallback = undefined;
+
+      if (!this.reaper.has(id)) {
+        fallback = new Process();
+        this.reaper.set(id, (fallback));
+        this.reaper_logging.register(fallback, id); 
+      }
+
+      return this.reaper.get(id);
+    }
+  };
 
   worker.onmessage = (event) => {
     let data = event.data;
@@ -138,6 +250,7 @@ async function createSandbox({
     const [command, value] = Object.entries(data)[0];
     const handler = worker_state.commands.get(command);
     if (handler) handler(value, worker_state, { event: event });
+    else console.warn('Unknown command from kernel', command, value);
   };
 
 
@@ -149,24 +262,38 @@ async function createSandbox({
    * client order. The rest of effects may be asynchronous.
    */
   worker_state.commands.set("error", data => {
-    const {configuration, error} = data;
+    console.log('Kernel error',  data);
+    const { configuration, error } = data;
     fallback_shell(configuration, error)
   });
 
   worker_state.commands.set("module", data => {
     // Kernel sending us modules to run in 'firmware'.
-    const { module, type, options } = data;
-    let blob = new Blob([module.file.data.buffer], { type: type || 'application/javascript' });
+    const { module, type, options, ed } = data;
+    let blob = new Blob([module], { type: 'application/javascript' });
     let blobURL = URL.createObjectURL(blob);
-    worker_state.createModuleFromBlob(blobURL, options);
+    worker_state.runModuleFromBlob(blobURL, options, ed);
   });
 
   worker_state.commands.set("reap", data => {
     // Kernel telling us a root process ended.
     const { stdout, stderr, status, pid, fid } = data;
     const reaper = worker_state.reaper.get(fid);
+
+    if (reaper == undefined) {
+      console.warn(`Process ${pid} reaped with no reaper`, data);
+      return;
+    }
+
     worker_state.reaper.delete(fid);
-    if(reaper) reaper({ stdout, stderr, status, pid, fid });
+    let pobj = reaper;
+
+    if (pobj == undefined) {
+      console.warn(`Process ${pid} reaped with no one waiting`, data);
+      return;
+    }
+
+    pobj?.resolve({ stdout, stderr, status, pid, fid });
   });
 
   worker_state.commands.set("element-select", data => {
@@ -236,12 +363,22 @@ async function createSandbox({
   }, [wasmbody])
 
   console.log('Mounted and running async');
+
+  while (worker_state.promises.length > 0) {
+    let worker_promises = worker_state.promises.splice(0, undefined);
+    await Promise.allSettled(worker_promises);
+  }
+
+  console.log('All firmware processes completed, shutdown?');
 }
 
 let worker_side_state = undefined;
 
+/* Part of the interface of spawning this module as a worker.
+ */
 onmessage = (event) => {
   console.log('worker received', event.data);
+
   if (event.data.start) {
     const { wasm_body, wasi_root_fs } = event.data.start;
     let channel = new MessageChannel();
@@ -252,7 +389,7 @@ onmessage = (event) => {
 
     channel.port1.onmessage = (event) => {
       const whatever = event.data;
-      console.log('worker sending', whatever);
+      console.log('worker sent', whatever);
       self.postMessage(whatever, whatever.transfer || []);
     };
 
@@ -262,8 +399,11 @@ onmessage = (event) => {
       port: channel.port2,
     })
   } else if (event.data.completed) {
-    const {ed, result} = event.data.completed;
-    worker_side_state.proxy_port.postMessage({ completed: { ed, result }});
+    const {ed, result, error, transfer} = event.data.completed;
+    worker_side_state.proxy_port.postMessage({ completed: { ed, result, error, transfer }}, transfer);
+  } else {
+    console.warn('worker received message may not be proxied correctly to kernel', event.data);
+    worker_side_state.proxy_port.postMessage(event.data, event.data.transfer);
   }
 }
 
@@ -519,7 +659,7 @@ async function worker_mount({
     console.log('Result(stderr)', new TextDecoder().decode(stderr.file.data));
   }
 
-  let module = filesystem.path_open(0, "boot/index.mjs", 0).fd_obj;
+  let module = filesystem.path_open(0, "init.mjs", 0).fd_obj;
 
   if (module == null) {
     return trigger_fallback(configuration);
@@ -538,6 +678,8 @@ async function worker_mount({
   } catch (e) {
     trigger_fallback(configuration, e);
   }
+
+  console.log('done with boot module');
 }
 
 export default createSandbox;

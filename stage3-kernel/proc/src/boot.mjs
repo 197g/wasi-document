@@ -1,5 +1,6 @@
 class RemoteElement {
   #elementFd;
+  #remote;
 
   constructor(element, remote) {
     this.elementFd = element;
@@ -15,10 +16,6 @@ class RemoteElement {
     this._invalidate();
   }
 
-  exec(fn_or_module, args, transfer) {
-    return this.remote.exec(this.elementFd, fn_or_module, args, transfer);
-  }
-
   _invalidate() {
     this.elementFd = 0;
   }
@@ -29,14 +26,23 @@ class RemoteEditPort {
   #elementFree;
   #port;
   #awaits;
+  #wasi;
+  #root_fs;
 
-  constructor(port) {
+  constructor(port, wasi, root_fs) {
     this.port = port;
+    this.wasi = wasi;
+    this.root_fs = root_fs;
+
     this.elementFree = []
     this.elementFd = 1;
     this.awaits = new Map();
 
-    this.port.onmessage = (ev) => this._handle_results(ev);
+    this.commands = new Map();
+    this.commands.set('completed', (ev) => this._handle_completed(ev));
+    this.commands.set('create-proc', (ev) => this._handle_create_proc(ev));
+
+    this.port.onmessage = (ev) => this._handle_message(ev);
   }
 
   select(selectors) {
@@ -73,23 +79,44 @@ class RemoteEditPort {
     this._deallocateEd(ed);
   }
 
-  exec(ed, fn_or_module, args, transfer) {
+  // Run a module in the context of the 'firmware' (stage 2).
+  //
+  // Its default export is called with the worker_state as parameter and
+  // `options` as second parameter. Also `options.import` controls the `import`
+  // call if present. `transfer` is used when one of the other arguments has a
+  // transferable object (e.g. ArrayBuffer). Note we can not `createObjectURL`
+  // within a worker hence passing the source and not a blob.
+  add_module(module, type, options, transfer) {
+    let ed = this._allocateEd();
+    let result = this._awaitable(ed);
+
+    this.port.postMessage({
+      'module': {
+        module,
+        type,
+        options,
+        ed,
+      },
+      'transfer': transfer || [],
+    });
+
+    return result.promise;
+  }
+
+  firmware_exec(ed, fn_or_module, args, transfer) {
     if (!(fn_or_module instanceof String)) {
       fn_or_module = fn_or_module.toString();
     }
 
-    var ret = this._allocateEd();
-    var result = Promise.withResolvers();
-    result.promise.finally(() => this._deallocateEd(ret));
-
-    this.awaits.set(ret, new WeakRef(result));
+    var ret_ed = this._allocateEd();
+    let result = this._awaitable(ret_ed);
 
     this.port.postMessage({
       'element-exec': {
         ed: ed,
         fn: fn_or_module,
         args: args,
-        ret,
+        ret_ed,
       },
       transfer: transfer,
     });
@@ -114,35 +141,163 @@ class RemoteEditPort {
     return ed;
   }
 
+  _awaitable(ret) {
+    var result = Promise.withResolvers();
+    result.promise.finally(() => this._deallocateEd(ret));
+    this.awaits.set(ret, new WeakRef(result));
+    return result;
+  }
+
   _deallocateEd(ed) {
     this.elementFree.push(ed);
   }
 
-  _handle_results(event) {
-    if (event.data.completed) {
-      const {ed, result} = event.data.completed;
-      this.awaits.get(ed)?.deref()?.resolve?.(result);
-      this.awaits.delete(ed);
+  _handle_message(event) {
+    let data = event.data;
+    delete data.transfer;
+
+    if (Object.keys(data).length != 1) {
+      return this._signal_error({ invalid_message: event, origin: 'kernel' });
     }
+
+    const [command, value] = Object.entries(data)[0];
+    const handler = this.commands.get(command);
+
+    try {
+      if (handler) handler(value, this, { event: event });
+    } catch (e) {
+      return this._signal_error({ handler_error: e, origin: 'kernel' });
+    }
+  }
+
+  _signal_error(error) {
+    this.port.postMessage({
+      error: error,
+    });
+  }
+
+  _handle_create_proc(create) {
+    const { executable, stdin, stdout, stderr, env, args, fid } = create;
+    let binary = executable || args[0];
+    this._dispatch({ binary, stdin, stdout, stderr, env, args }).then((settled) => {
+      console.log('Process settled', fid);
+      this._reap(fid, 0, settled.configuration);
+    })
+  }
+
+  _reap(fid, status, wasi) {
+    let transfer = [];
+
+    let stdout = wasi.fds[1]?.file?.data;
+    let stderr = wasi.fds[2]?.file?.data;
+
+    transfer.push(stdout?.buffer);
+    transfer.push(stderr?.buffer);
+
+    this.port.postMessage({
+      reap: {
+        pid: '',
+        fid,
+        stdout,
+        stderr,
+      },
+      transfer: transfer.filter(x => x !== undefined),
+    })
+  }
+
+  _handle_completed(completed) {
+    const {ed, result, error} = completed;
+    const handler = this.awaits.get(ed);
+    this.awaits.delete(ed);
+
+    if (error) {
+      handler?.deref()?.resolve?.(result);
+    } else {
+      handler?.deref()?.reject?.(result);
+    }
+  }
+
+  async _dispatch({ binary, env, args, stdin, stdout, stderr, element }) {
+    // FIXME: in a kernel we may have this pre-opened (exec from a memfd)
+    if (binary == null) {
+      console.error(...arguments);
+      throw 'No binary specified';
+    }
+
+    const exec_binary = this.root_fs
+      ?.path_open(0, ''+binary, 0, 0)
+      ?.fd_obj;
+
+    // FIXME: no, we do not want to default these paths. The respective files
+    // should be simulated and not bound to any path in the file system. Also
+    // like have a `/dev/null` right? We need to create our own Directory nodes
+    // that are mounts.
+    var fds = [];
+    fds[0] = this._open_io(stdin);
+    fds[1] = this._open_io(stdout);
+    fds[2] = this._open_io(stderr);
+    fds[3] = this.root_fs;
+
+    let blob = new Blob([exec_binary.file.data.buffer], { type: 'application/wasm' });
+    let wasm = await WebAssembly.compileStreaming(new Response(blob));
+
+    let newWasi = new this.wasi(args, [], fds);
+    var wasi_imports = { 'wasi_snapshot_preview1': newWasi.wasiImport };
+    const instance = await WebAssembly.instantiate(wasm, wasi_imports);
+	  console.log('Starting process ', newWasi);
+
+    let status = 0;
+    try {
+      await newWasi.start({ 'exports': instance.exports });
+    } catch (e) {
+      if (typeof(e) == 'string' && e == 'exit with exit code 0') {} else {
+        status = -1;
+        throw e;
+      }
+    }
+
+    var element = new RemoteElement(element, this);
+    return new ProcessSettled(newWasi, wasi_imports, status, element);
+  }
+
+  _open_io(io) {
+    function uuidv4() {
+      return "10000000-1000-4000-8000-100000000000".replace(/[018]/g, c =>
+        (+c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> +c / 4).toString(16)
+      );
+    }
+
+    let path = null;
+
+    if (io.pipe) {
+      path = 'io-' + uuidv4();
+    } else if (io.file) {
+      path = ''+io.file;
+    } else if (io.null) {
+      return null;
+    } else {
+      throw 'Invalid IO specification';
+    }
+
+    // Similar to Linux, all IO is open read-write internally :)
+    return this.root_fs?.path_open(0, path, 1, 1)?.fd_obj;
   }
 }
 
 class ProcessSettled {
   #configuration;
   #imports;
-  #element;
+  #status;
 
-  constructor(configuration, imports, element) {
+  constructor(configuration, imports, status) {
     this.configuration = configuration;
     this.imports = imports;
-    this.element = element;
+    this.status = status;
   }
 
   file_data(path) {
     let preopen = this.configuration.fds[3];
-	  console.log(preopen);
     let fd = preopen?.path_open(0, path, 0, 0);
-	  console.log(fd);
     return fd?.fd_obj?.file.data.buffer;
   }
 
@@ -158,92 +313,23 @@ class ProcessSettled {
     this.element.replace(output);
   }
 
-  exec(fn_or_module, args, transfer) {
-    this.element.exec(fn_or_module, args, transfer);
-  }
-
-  async dispatch({ executable, args, stdin, stdout, stderr, element }) {
-    const root_fs = this.configuration.fds[3];
-    const post_process = root_fs
-      ?.path_open(0, executable, 0, 0)
-      ?.fd_obj;
-
-    let blob = new Blob([post_process.file.data.buffer], { type: 'application/wasm' });
-
-    let wasm = await WebAssembly.compileStreaming(new Response(blob));
-
-    // FIXME: no, we do not want to default these paths. The respective files
-    // should be simulated and not bound to any path in the file system. Also
-    // like have a `/dev/null` right?
-    var fds = [];
-    fds[0] = root_fs?.path_open(0, stdin || 'stdin', 1, 1)?.fd_obj;
-    fds[1] = root_fs?.path_open(0, stdout || 'stdout', 1, 1)?.fd_obj;
-    fds[2] = root_fs?.path_open(0, stderr || 'stderr', 1, 1)?.fd_obj;
-    fds[3] = root_fs;
-    console.log(fds);
-
-    let newWasi = new this.configuration.WASI(args, [], fds);
-    var wasi_imports = { 'wasi_snapshot_preview1': newWasi.wasiImport };
-    const instance = await WebAssembly.instantiate(wasm, wasi_imports);
-	  console.log('Starting process ', newWasi);
-
-    try {
-      await newWasi.start({ 'exports': instance.exports });
-    } catch (e) {
-      if (typeof(e) == 'string' && e == 'exit with exit code 0') {} else {
-        throw e;
-      }
-    }
-
-    var element = new RemoteElement(element, this.element.remote);
-    return new ProcessSettled(newWasi, wasi_imports, element);
+  firmware_exec(fn_or_module, args, transfer) {
+    this.element.firmware_exec(fn_or_module, args, transfer);
   }
 }
 
 export default async function(configuration) {
-  /* Problem statement:
-   * We'd like to solve the problem of exporting our current WASI for use by
-   * wasm-bindgen. It is not currently supported to pass such additional
-   * imports as a parameter to the init function of wasm-bindgen. Instead, the
-   * module generated looks like so:
-   *
-   *     import * as __wbg_star0 from 'wasi_snapshot_preview1';
-   *     // etc.
-   *     imports['wasi_snapshot_preview1'] = __wbg_star0;
-   *
-   * Okay. So can we setup such that the above `wasi_snapshot_preview1` module
-   * refers to some shim that we control? Not so easy. We can not simply create
-   * an importmap; we're already running in Js context and it's forbidden to
-   * modify after that (with some funny interaction when rewriting the whole
-   * document where warnings are swallowed?). See `__not_working_via_importmap`.
-   *
-   * Instead, we will hackishly rewrite the bindgen import if we're asked to.
-   * Create a shim module that exports the wasi objects' import map, and
-   * communicate with the shim module via a global for lack of better ideas. I
-   * don't like that we can not reverse this, the module is cached, but oh
-   * well. Let's hope for wasm-bindgen to cave at some point. Or the browser
-   * but 'Chromium does not have the bandwidth' to implement the dynamic remap
-   * feature already in much smaller products. And apparently that is the
-   * motivation not to move forward in WICG. Just ____ off. When talking about
-   * Chrome monopoly leading to bad outcomes, this is one. And no one in
-   * particular is at fault of course.
-   */
-  async function reap_into_inner_text(proc) {
-    const [stdin, stdout, stderr] = proc.configuration.fds;
-    proc.element.innerText = new TextDecoder().decode(stdout.file.data);
-    proc.element.title = new TextDecoder().decode(stderr.file.data);
-  }
-
   console.log('Reached stage3 successfully', configuration);
-  const wasm = configuration.wasm_module;
-  const remote = new RemoteEditPort(configuration.port);
 
+  const wasm = configuration.wasm_module;
+  const root_fs = configuration.fds[3];
+
+  const remote = new RemoteEditPort(configuration.port, configuration.WASI, root_fs);
   let newWasi = new configuration.WASI(configuration.args, configuration.env, configuration.fds);
 
   /* */
   const kernel_bindings = WebAssembly.Module.customSections(wasm, 'wah_polyglot_wasm_bindgen');
 
-  const root_fs = configuration.fds[3];
   configuration.fds[0] = root_fs.path_open(0, "proc/0/fd/0", 0, 1).fd_obj;
   configuration.fds[1] = root_fs.path_open(0, "proc/0/fd/1", 0, 1).fd_obj;
   configuration.fds[2] = root_fs.path_open(0, "proc/0/fd/2", 0, 1).fd_obj;
@@ -271,6 +357,21 @@ export default async function(configuration) {
   assign_arguments("proc/0/cmdline", (e) => configuration.args.push(e), "cmdline");
   assign_arguments("proc/0/environ", (e) => configuration.env.push(e), "environ");
 
+  let bootdir = undefined;
+  if (bootdir = root_fs?.dir.get_entry_for_path("boot")) {
+    console.log('Found boot directory', bootdir);
+    for (let [name, entry] of Object.entries(bootdir?.contents || [])) {
+      console.log(name, entry);
+      if (!name.match(/\.mjs$/)) {
+        continue;
+      }
+
+      // Execute this mjs module
+      let type = name.endsWith('.mjs') ? 'module' : 'application/typescript';
+      remote.add_module(entry.data, type, {}, [entry.data.buffer]);
+    }
+  }
+
   let reaper = [];
 
   try {
@@ -282,34 +383,15 @@ export default async function(configuration) {
     let blob = new Blob([process.file.data.buffer], { type: 'application/wasm' });
     let wasm = await WebAssembly.compileStreaming(new Response(blob));
 
-    // FIXME: hardcoded, should be configurable. Also if we launch multiple
-    // process instances concurrently then they are configured by finding a
-    // number of `<template>` elements that contain instructions for a
-    // derived configuration in that shared environment. Then the context is
-    // that element itself, allowing it to be replaced with the actual
-    // rendering intent.
-    var element = remote.select([
-      { 'by-id': 'wasi-document-init'},
-      { 'by-tag-name': 'body'},
-    ]);
-
-    console.log('Using init element', element, configuration);
+    console.log('Using init element', configuration);
 
     // The init process controls the whole body in the end.
     reaper.push({
       configuration: configuration,
       // FIXME: hardcoded but permissible?
-      post_module: reap_into_inner_text,
+      post_module: async () => {},
       // FIXME: hardcoded, should be configurable
       override_file: 'proc/0/display.mjs',
-      // The element context.
-      //
-      // FIXME: replacement should also be possible early if we want to avoid
-      // flicker. That is before this stops running. A balanced approach may be
-      // enabled by WASI 0.2's component model where we have `async` / stream
-      // functions. That is functions that yield to the host multiple times
-      // before setting a result.
-      element: element,
       imports: wasi_imports,
     });
 
@@ -319,6 +401,8 @@ export default async function(configuration) {
     const instance = await WebAssembly.instantiate(wasm, wasi_imports);
     wasi_exports = instance.exports;
     await newWasi.start({ 'exports': wasi_exports });
+
+    remote._reap(/*fid*/ 0, /*status*/ 0, newWasi);
   } catch (e) {
     if (typeof(e) == 'string' && e == 'exit with exit code 0') {} else {
       console.dir(typeof(e), e);
@@ -359,4 +443,6 @@ export default async function(configuration) {
   if ((have_an_error = display.filter(el => el.reason !== undefined)).length > 0) {
     configuration.fallback_shell(configuration, have_an_error);
   }
+
+  // Rest of this work done by bound element.onmessage.
 }
