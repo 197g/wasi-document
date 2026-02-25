@@ -2,17 +2,21 @@
 members = [
   ".",
   "lib/html_and_tar",
+  "lib/minify-js",
+  "lib/wasi-document-dom",
+
   "bin/polywrap",
   "bin/wasi-document",
+
   "stage2-loader/interpret",
   "stage3-kernel/proc",
-  # Application for stage3/unzip
-  "examples/wasi/plotters-normal-2d", "lib/wasi-document-dom", "lib/minify-js",
+
+  # Application for stage3/kernel
+  "examples/plotters-normal-2d",
 ]
 
 exclude = [
 	"examples/GladiusSlicer/GladiusSlicer",
-	"examples/fidget/fidget",
 ]
 
 default-members = ["bin/wasi-document"]

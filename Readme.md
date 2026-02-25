@@ -9,41 +9,48 @@ you to preserve the WebAssembly interpretation, unchanged, while adding an HTML
 loader as a sort of platform polyfill, to substitute the native environment
 with a billion-dollar platform independent sandbox.
 
-**This is not only a proof-of-concept, nor a joke**. Granted, it started out
+**Not merely a proof-of-concept, nor a joke**. Granted, it started out
 that way but there is surprising depth of engineering that accumulated after
-the initial rush of ideas. Without hyperbole, I want to explore turning it into
-as much of a serious document format as PDF. The wrapper provides a robust
-foundation for wrapping full applications. With the readme below, the system
-can be understood fully and all its parts adjusted. Importantly, **You** can do
-this.
+the initial rush of ideas. I want to explore turning it into as much of a
+serious document format as PDF, but natively on interactive displays with a
+solid specification that makes sense to parse. Further, it wrap a robust
+foundation for a full operating system.
+
+With the readme below, the system can be understood fully and all its parts
+adjusted. Importantly, **You** can do this.
 
 ## How to use it
 
-The 'packer' acts as a filter for a WebAssembly module. It's a simple program,
-if you want to explore its command line options run `wasm-as-html --help`.
-
-```bash
-# Assume you want to deploy a 'TodoMVC' app:
-wasm-as-html --index-html /my/index.html /my/todomvc.js < /my/todomvc_bg.wasm > todomvc.html
-```
-
-See [examples/yew/Readme.md][examples/yew/Readme.md] for a detailed description.
-
-Or [TodoMVC deployed on gh-pages](https://heroickatora.github.io/wasm-as-html/examples/yew/todomvc.html).
+This section is under renovation.
 
 ## Tricks related to tar compatibility
 
-The file contents for the zip archive and bootstrapping are interpolated into
-the HTML when choosing the `html+tar` target. However, due to compatibility
-issues and concerns this can not happen verbatim as bytes. We prioritize the
-ability to preserve the original file structure and the majority of its
-execution model.
+The file contents from a root directory and bootstrapping are inserted into the
+HTML when choosing the `html+tar` target. Due to compatibility issues and
+concerns this can not happen verbatim as bytes. We prioritize the ability to
+preserve the original file structure and the majority of its execution model.
 
 - The inline contents of files are encoded as base64.
-- We encode additional data with pax header entries (typeflag='x'). Previously,
-  these were also contained in files with empty filenames. The pax header data
-  itself may be significant. As a main hack, the HTML is assumed UTF8 and its
-  own start is a marked as comment in such a header.
+- We can usually repack a file if its HTML was edited as long as our inserted
+  tags are still present. For this we crawl the HTML structure to extract the
+  original files while stripping the HTML of our modifications. Repacking is
+  necessary to fix some offsets to match the Tar structure. We use
+  nul-characters, in attributes or text content, to pad the HTML file as
+  necessary.
+- Tar headers always come in an pax extension&file pair and have the extensions
+  first field, file name, start with a nul-byte after which we have limited
+  space for some HTML code that is ignored by tar. We use that to open a
+  `<noscript>` tag and stuff the rest of the header into an attribute of the
+  tag. We close off that attribute just before the file header so that the
+  original file name also becomes an HTML readable attribute (apart from a few
+  extra nuls).
+- We encode additional data with pax header entries (typeflag='x'). A sequence
+  of files is terminated by a sentinel of two extension headers after which
+  original HTML data follows. The pax header data itself would be interpreted
+  as significant, hence as a main hack, the last header is made to end in a
+  comment that closes the escape-tag and then encompasses following HTML data.
+  Knowing the byte offset to the next Tar header pair, tar reads over the
+  uncontrolled HTML.
 - We encode external references as sparse files (typeflag='S'). The linkname
   contains the parent URL where to fetch them.
 
@@ -110,40 +117,6 @@ where one _can_ change the underlying software. If, however, you have reason to
 believe any features herein is designed to actively contribute to the effect
 the *please* speak up.
 
-## How it works
-
-The packer takes two arguments: A WebAssembly module, and a stage 2 loader
-(Javascript file) that will be given control over the page and passed a (fake)
-Promise to a Response that resolves to the file's bytes. The recommended stage
-2 is some web-sys implementation which passes control directly to the parsed
-and instantiated module.
-
-The technical inner workings:
-* The *first* section in WASM is a custom one that parses as HTML. The trick
-  from [here](https://fuzzinglabs.com/polyglot-webassembly-module-html-js-wasm/)
-  implemented in a slightly more robust fashion. Note that this `stage0` is not
-  of arbitrary size. Otherwise the binary encoding of the WebAssembly section's
-  length will cause problems as they get parsed as HTML. This stage reads the
-  first custom section with the name `wah_polyglot_stage1`.
-
-  The stage also contains an inline link with `rel` set as `stylesheet`, in
-  what is interpreted as the body. This stylesheet is applied in order to hide
-  unwanted elements and display a notice in any no-JS context.
-
-* The second section is another custom one, which is our stage1 with arbitrary
-  contents. We almost immediately dispatch here from stage0 leaving behind all
-  notions of HTML that we started with. We're now preparing the web page for
-  the module packed as stage2. That is, loading a new skeleton with expected
-  elements that the module might need to bootstrap itself.
-
-  It reads the section named `wah_polyglot_stage1_html` as a new document
-  contents, as well as the first `wah_polyglot_stage2` for the subsequent
-  module. The stage will error if multiple stage2 modules are defined.
-
-WIP: additionally, an auxiliary `.zip` file can be passed. The packer then
-ensures that the result is _also_ a valid zip archive with all files intact and
-such that they are accessible from the webassembly module as a custom module.
-
 ## Overview of stages
 
 The program inserts bootstrap sections into the WebAssembly module. These are
@@ -187,12 +160,3 @@ For PDF [Work-In-Progress]:
   settings anyways. Media and GPU embeddings are just worse and also badly
   sandboxed versions of the equivalent HTML specifications; and privacy
   nightmares. Nothing was learned from Flash. Experiment on your own.
-
-## Experimental
-
-There's an experimental `--edit` flag. This replaces stage1 with an auto-reload
-driver, which will periodically refetch the file to compare hashes. It will
-then invoke the entrypoint with a response promise for the new bytes. This may
-or may not work. It can fundamentally not detect changes in any other
-dependency, the browser sandbox prevents that for good reason. It is
-recommended you use something like the `compile.sh` script in a watch.

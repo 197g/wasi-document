@@ -1,0 +1,10 @@
+[Document]
+index-html = "index.html"
+
+[[Document.Install]]
+path = "."
+package = "plotters-normal-2d"
+
+[Machine]
+stage2 = { flavor = "node", workdir = "../../stage2-loader", build = "build.mjs" }
+stage3 = { flavor = "rust", package = "wasi-document-unzip", bin = "unzip" }
