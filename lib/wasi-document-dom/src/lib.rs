@@ -139,7 +139,7 @@ fn parse_tar_tags(source: &mut SourceDocument) -> Result<Structure, Box<dyn Erro
                     .insert(0, lithtml::Node::Element(synth_script));
             }
 
-            *source = SourceDocument::from_reparse(&dom);
+            *source = SourceDocument::from_reparse(&mut dom);
 
             is_original = false;
             continue;
@@ -318,7 +318,20 @@ impl<'text> SourceDocument<'text> {
         }
     }
 
-    pub fn from_reparse(dom: &lithtml::Dom) -> Self {
+    pub fn from_reparse(dom: &mut lithtml::Dom) -> Self {
+        // Fix for <https://github.com/Roba1993/lithtml/issues/1>. Empty non-void elements are
+        // formatted as self-closing, but HTML does not permit that. We insert a fake empty string
+        // node in each one.
+        find_element_mut(dom, |node| {
+            if let lithtml::Node::Element(el) = node {
+                if el.variant == lithtml::ElementVariant::Normal && el.children.is_empty() {
+                    el.children.push(lithtml::Node::Text(Cow::Borrowed("")));
+                }
+            }
+
+            false
+        });
+
         let text: String = dom.to_string();
 
         let by_line = text.split_inclusive('\n').scan(0usize, |acc, val| {
@@ -448,7 +461,7 @@ impl<'text> SourceDocument<'text> {
             false
         });
 
-        *self = SourceDocument::from_reparse(&dom);
+        *self = SourceDocument::from_reparse(&mut dom);
 
         Ok(files)
     }
