@@ -19,7 +19,9 @@ fn render_svg(output: &mut String) -> Result<(), Box<dyn std::error::Error>> {
 
     let random_points: Vec<f64> = {
         let norm_dist = Normal::new(0.0, sd).unwrap();
-        let mut x_rand = XorShiftRng::from_seed(*b"MyFragileSeed123");
+        let mut seed = [0u8; 16];
+        getrandom::fill(&mut seed)?;
+        let mut x_rand = XorShiftRng::from_seed(seed);
         let x_iter = norm_dist.sample_iter(&mut x_rand);
         x_iter.take(5000).filter(|x| f64::abs(*x) <= 4.0).collect()
     };
