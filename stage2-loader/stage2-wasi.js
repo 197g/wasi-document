@@ -364,13 +364,186 @@ async function createSandbox({
 
   console.log('Mounted and running async');
 
+  initialize_firmware(worker_state);
+
   while (worker_state.promises.length > 0) {
-    let worker_promises = worker_state.promises.splice(0, undefined);
+    let worker_promises = worker_state.promises.splice(0, Infinity);
+
+    if (worker_promises.length == 0) {
+      break;
+    }
+
     await Promise.allSettled(worker_promises);
   }
 
   console.log('All firmware processes completed, shutdown?');
 }
+
+/** Our instructions come from the page.
+ *
+ * We parse meta elements based on their itemprop (and related value by `content` attribute).
+ */
+async function initialize_firmware(worker_state) {
+  let headElement = document.getElementsByTagName('head');
+
+  if (headElement.length == 0) {
+    return;
+  }
+
+  let metas = Array.from(headElement[0]?.querySelectorAll(':scope>meta[itemprop="wasi-document"]'));
+  let declarative = metas.find(el => el.content == 'init-declarative');
+
+  if (declarative) {
+    // We run in declarative mode, observing and running the wasi-document
+    // custom elements, while this element is present. They observe themselves
+    // via the lifecycle hooks but we observe the meta element to know when it
+    // is removed and thus when to stop observing.
+    let stop_at = Promise.withResolvers();
+
+    let observer = new MutationObserver((mutations) => {
+      for (let mutation of mutations) {
+        let removed = Array.from(mutation.removedNodes || []);
+
+        if (removed.indexOf(declarative) >= 0) {
+          console.trace('Stopping observation of declarative wasi-document elements');
+          observer.disconnect();
+          stop_at.resolve(observer);
+        }
+      }
+    });
+
+    console.trace('Running in declarative mode, observing meta element for stop');
+    observer.observe(headElement[0], { childList: true, subtree: false });
+    worker_state.promises.push(stop_at.promise);
+  }
+
+  if (metas.find(el => el.content == 'wasi-document-output')) {
+    let templates = Array.from(document.getElementsByClassName('wasi-document-process'))
+      .filter(el => el.tagName == 'TEMPLATE');
+
+    let template_map = templates.reduce((acc, el) => {
+      let key = el.getAttribute('data-process');
+      acc.set(key, el);
+      return acc;
+    }, new Map());
+
+    class WasiDocumentRender extends HTMLElement {
+      constructor() {
+        super();
+      }
+    }
+
+    // Note we define it here. Global scope is also read by the worker. This
+    // makes the module self-contained but really it isn't very nice. Also this
+    // way we can refer to the actual worker state. Maybe it is nice.
+    class WasiDocumentElement extends HTMLElement {
+      static worker_state = worker_state;
+      static template_map = template_map;
+      static observedAttributes = ['data-wasi-process'];
+
+      constructor() {
+        super();
+        this.proc_id = this.getAttribute('data-wasi-process');
+      }
+
+      connectedCallback() {
+        let process_template = this.constructor.template_map.get(this.proc_id);
+        console.log('Running process from template', process_template);
+        let promise = this.#instantiate(process_template);
+      }
+
+      #instantiate(template) {
+        const template_node = this.ownerDocument.importNode(template.content, true);
+
+        // We 'render' the thing into a new template node. The point here is
+        // that our own element, which is a temporary for rendering, is not
+        // getting modified with the process template before we have the actual
+        // output. The node must be in the document though..
+        const rendered = this.parentElement.appendChild(this.ownerDocument.createElement('wasi-document-render'));
+
+        let contents = new DocumentFragment();
+        contents.replaceChildren(...this.cloneNode(true).children);
+        rendered.append(contents);
+        // rendered.hidden = true;
+
+        const shadowRoot = rendered.attachShadow({ mode: "open", slotAssignment: "named" });
+        shadowRoot.appendChild(template_node);
+
+        // FIXME: if you think we should do slots ourselves to force it to
+        // happen in the same tick, be my guest. I think that's a bad idea and
+        // let's just acquire the element after..
+        if (shadowRoot.querySelector('slot')) {
+          console.trace('slots, so we render on event');
+          shadowRoot.addEventListener('slotchange', this.#ondefinitionready.bind(this, rendered), { once: false });
+        } else {
+          console.trace('no slots, we render now');
+          this.#ondefinitionready(rendered);
+        }
+      }
+
+      #ondefinitionready(rendered) {
+        let create_process = this.#build_create_process(rendered.shadowRoot);
+      }
+
+      #build_create_process(root) {
+        // Build the props, including those elements from the light DOM.
+
+        // FIXME: While we are currently in a slotchange event, we could cache
+        // unchanged slot trees. Then again this is not supposed to change;
+        // just be called once.
+        let assignees = [...root.querySelectorAll('slot')]
+          .flatMap(slot => slot.assignedElements({ flatten: true }));
+
+        // Note that querySelectorAll only selects descendants. So we handle
+        // the newly discovered roots separately by our own.
+        let recursive = assignees.flatMap(el => [...el.querySelectorAll(':scope [itemprop]')]);
+
+        let props = [
+          ...root.querySelectorAll('[itemprop]'),
+          ...assignees.filter(el => el.hasAttribute('itemprop')),
+          ...recursive,
+        ];
+
+        let args = props.filter(el => el.getAttribute('itemprop') == 'args');
+        let env = props.filter(el => el.getAttribute('itemprop') == 'env');
+        let fds = props.filter(el => el.getAttribute('itemprop') == 'fd');
+
+        let stdin = fds.find(el => el.getAttribute('data-fd') == '0');
+        let stdout = fds.find(el => el.getAttribute('data-fd') == '1');
+        let stderr = fds.find(el => el.getAttribute('data-fd') == '2');
+
+        const io_element = (el) => {
+          if ((el || null) == null) return { null: true };
+          else if (el.tagName == 'A') return { file: el.href };
+          // FIXME: initial content from text content.
+          else return { pipe: true };
+        };
+
+        return {
+          args: args.map(el => el.textContent),
+          env: env.map(el => el.textContent),
+          stdin: io_element(stdin),
+          stdout: io_element(stdout),
+          stderr: io_element(stderr),
+        }
+      }
+    }
+
+    customElements.define('wasi-document-render', WasiDocumentRender);
+    customElements.define('wasi-document-output', WasiDocumentElement);
+  }
+}
+
+/***
+ * Worker side, running initially in the WebWorker to provide the basic
+ * communication to the kernel and bootstrap it.
+ *
+ * FIXME: sometimes we may want the kernel (the basic Wasm module) to run
+ * directly in the browser and for it to be mounted with wasm-bindgen bindings.
+ * That is it should be pointless to provide a 'kernel' if we only send some
+ * data back to the browser and need the filesystem anyways.. (also that lets
+ * us avoid JSPI by speaking wasip1 across the worker socket).
+ */
 
 let worker_side_state = undefined;
 

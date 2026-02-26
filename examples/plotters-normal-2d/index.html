@@ -1,8 +1,18 @@
 <html>
 	<head>
-		<meta itemprop=wasi-document></meta>
+		<meta itemprop=wasi-document content=init-declarative />
+		<meta itemprop=wasi-document content=wasi-document-output />
+		<template class="wasi-document-process" data-process=0 itemscope>
+			<span itemprop=args>bin/plotters-normal-2d.wasm</span>
+
+			<!--
+				No stdin and stderr.
+				<a itemprop=fd data-fd=0 href=path/to/file></a>
+			 -->
+      <span itemprop=fd data-fd=1> </span>
+		</template>
 	</head>
 	<body>
-		<span data-wasi-process=0></span>
-	<body>
+		<wasi-document-output data-wasi-process=0></wasi-document-output>
+	</body>
 </html>
