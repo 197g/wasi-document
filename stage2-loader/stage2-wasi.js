@@ -128,6 +128,15 @@ async function createSandbox({
     }),
     fid_counter: 65536,
 
+    kernel: {
+      // Promise that is ready when the kernel signals finishing its own boot (general readiness).
+      boot: Promise.withResolvers(),
+      // Promise that is ready when the kernel signals we can interact with its filesystem.
+      filesystem: Promise.withResolvers(),
+      // Promise that is ready when the kernel signals we can spawn processes.
+      create_proc: Promise.withResolvers(),
+    },
+
     worker: worker,
     wasi_stage_url,
     commands: new Map(), 
@@ -296,6 +305,22 @@ async function createSandbox({
     pobj?.resolve({ stdout, stderr, status, pid, fid });
   });
 
+  worker_state.commands.set("run-level", data => {
+    const levels = Object.assign({ 'boot': 0, 'filesystem': 0, 'create-proc': 0 }, data);
+
+    if (levels['boot'] > 0) {
+      worker_state.kernel.boot.resolve();
+    }
+    if (levels['filesystem'] > 0) {
+      worker_state.kernel.filesystem.resolve();
+    }
+    if (levels['create-proc'] > 0) {
+      worker_state.kernel.create_proc.resolve();
+    }
+
+    console.log(`Kernel reached run level ${data}`);
+  });
+
   worker_state.commands.set("element-select", data => {
       const {ed, selectors} = data;
 
@@ -363,9 +388,10 @@ async function createSandbox({
   }, [wasmbody])
 
   console.log('Mounted and running async');
-
   initialize_firmware(worker_state);
+  await worker_state.kernel.boot.promise;
 
+  console.log('Kernel reach run-level booted');
   while (worker_state.promises.length > 0) {
     let worker_promises = worker_state.promises.splice(0, Infinity);
 
@@ -427,12 +453,6 @@ async function initialize_firmware(worker_state) {
       return acc;
     }, new Map());
 
-    class WasiDocumentRender extends HTMLElement {
-      constructor() {
-        super();
-      }
-    }
-
     // Note we define it here. Global scope is also read by the worker. This
     // makes the module self-contained but really it isn't very nice. Also this
     // way we can refer to the actual worker state. Maybe it is nice.
@@ -459,12 +479,12 @@ async function initialize_firmware(worker_state) {
         // that our own element, which is a temporary for rendering, is not
         // getting modified with the process template before we have the actual
         // output. The node must be in the document though..
-        const rendered = this.parentElement.appendChild(this.ownerDocument.createElement('wasi-document-render'));
+        const rendered = this.insertAdjacentElement('beforeend', this.ownerDocument.createElement('aside'));
 
         let contents = new DocumentFragment();
         contents.replaceChildren(...this.cloneNode(true).children);
         rendered.append(contents);
-        // rendered.hidden = true;
+        rendered.hidden = true;
 
         const shadowRoot = rendered.attachShadow({ mode: "open", slotAssignment: "named" });
         shadowRoot.appendChild(template_node);
@@ -483,6 +503,16 @@ async function initialize_firmware(worker_state) {
 
       #ondefinitionready(rendered) {
         let create_process = this.#build_create_process(rendered.shadowRoot);
+        let worker_state = WasiDocumentElement.worker_state;
+
+        worker_state.kernel.create_proc.promise.then(() => {
+          console.log('Creating process with', create_process);
+
+          let reaper = worker_state.createProcess(create_process);
+          reaper.promise().then((result) => {
+            this.#assignresult(rendered, result);
+          });
+        });
       }
 
       #build_create_process(root) {
@@ -527,9 +557,20 @@ async function initialize_firmware(worker_state) {
           stderr: io_element(stderr),
         }
       }
+
+      #assignresult(rendered, { stdout, stderr, status }) {
+        rendered.remove();
+        // NOTE: we should have an attribute to modify the encoding? Nah. UTF-8 is good.
+        const utf8decoder = new TextDecoder();
+        // TODO: we should have an attribute to modify where to put this. You
+        // may not always want to replace the entire content and since we are
+        // already doing things with slots, maybe a reserved slot name should
+        // let you list elements to be replaced. Also, differentiate between
+        // `innerHTML`, `textContent`, `value`, `outerHTML`?
+        this.innerHTML = utf8decoder.decode(stdout);
+      }
     }
 
-    customElements.define('wasi-document-render', WasiDocumentRender);
     customElements.define('wasi-document-output', WasiDocumentElement);
   }
 }

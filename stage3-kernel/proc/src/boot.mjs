@@ -28,11 +28,13 @@ class RemoteEditPort {
   #awaits;
   #wasi;
   #root_fs;
+  #run_level;
 
   constructor(port, wasi, root_fs) {
     this.port = port;
     this.wasi = wasi;
     this.root_fs = root_fs;
+    this.#run_level = {};
 
     this.elementFree = []
     this.elementFd = 1;
@@ -122,6 +124,14 @@ class RemoteEditPort {
     });
 
     return result;
+  }
+
+  run_level(level) {
+    Object.assign(this.#run_level, level);
+
+    this.port.postMessage({
+      'run-level': this.#run_level,
+    });
   }
 
   _allocateEd() {
@@ -327,6 +337,13 @@ export default async function(configuration) {
   const remote = new RemoteEditPort(configuration.port, configuration.WASI, root_fs);
   let newWasi = new configuration.WASI(configuration.args, configuration.env, configuration.fds);
 
+  remote.run_level({
+    /* The kernel is done */
+    'boot': 1,
+    /* We provide filesystem access to the firmware */
+    'filesystem': 1,
+  });
+
   /* */
   const kernel_bindings = WebAssembly.Module.customSections(wasm, 'wah_polyglot_wasm_bindgen');
 
@@ -371,6 +388,10 @@ export default async function(configuration) {
       remote.add_module(entry.data, type, {}, [entry.data.buffer]);
     }
   }
+
+  remote.run_level({
+    'create-proc': 1,
+  });
 
   let reaper = [];
 
