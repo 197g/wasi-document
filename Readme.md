@@ -1,5 +1,9 @@
 A packer that adds a webpage to WASI application, making it self-hosted!
 
+Demo: <https://197g.github.io/wasi-document/examples/plotters-normal-2d/index.html>
+
+Download the freestanding file [here](https://github.com/197g/wasi-document/blob/gh-pages/examples/plotters-normal-2d/index.html).
+
 ## Motivation
 
 At the moment, Browsers can not execute WebAssembly as a native single page
