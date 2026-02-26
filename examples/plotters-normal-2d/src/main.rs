@@ -1,3 +1,4 @@
+use std::io::Write as _;
 use plotters::prelude::*;
 
 use rand::SeedableRng;
@@ -6,6 +7,14 @@ use rand_xorshift::XorShiftRng;
 
 const OUT_FILE_NAME: &'static str = "normal-dist2.png";
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut output = String::new();
+    render_svg(&mut output)?;
+    write!(std::io::stdout(), "{}", output)?;
+    eprintln!("Result has been saved to {}", OUT_FILE_NAME);
+    Ok(())
+}
+
+fn render_svg(output: &mut String) -> Result<(), Box<dyn std::error::Error>> {
     let sd = 0.60;
 
     let random_points: Vec<f64> = {
@@ -15,7 +24,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         x_iter.take(5000).filter(|x| f64::abs(*x) <= 4.0).collect()
     };
 
-    let root = SVGBackend::new(OUT_FILE_NAME, (1024, 768)).into_drawing_area();
+    let root = SVGBackend::with_string(output, (1024, 768)).into_drawing_area();
 
     root.fill(&WHITE)?;
 
@@ -71,11 +80,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // To avoid the IO failure being ignored silently, we manually call the present function
     root.present().expect("Unable to write result to file, please make sure 'plotters-doc-data' dir exists under current dir");
-    println!("Result has been saved to {}", OUT_FILE_NAME);
 
     Ok(())
 }
+
 #[test]
 fn entry_point() {
-    main().unwrap()
+    let mut output = String::new();
+    render_svg(&mut output).unwrap()
 }
