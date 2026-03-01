@@ -139,16 +139,16 @@ fn merge_wasm(project: &Work) -> Result<(), Box<dyn std::error::Error>> {
 
 fn rebuild_wasm(project: &Work, file: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let source = std::fs::read_to_string(file)?;
-
     let mut source = dom::SourceDocument::new(&source);
     let files = source.split_tar_contents()?;
+
     let files = files.iter().flat_map(|file| {
         let wasi_document_dom::TarFile { header, content } = file;
         let cstr = CStr::from_bytes_until_nul(&header.name).ok()?;
         Some(html_and_tar::Entry {
             name: cstr.to_str().ok()?,
             data: content,
-            attributes: Default::default(),
+            attributes: file.attributes(),
         })
     });
 

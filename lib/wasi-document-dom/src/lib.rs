@@ -1,7 +1,7 @@
 use core::{error::Error, ops};
 use std::borrow::Cow;
 
-use html_and_tar::{ParsedFileData, TarDecompiler, TarHeader};
+use html_and_tar::{ParsedFileData, EntryAttributes, TarDecompiler, TarHeader};
 use lithtml::{Dom, Element, Node};
 
 pub struct Structure {
@@ -31,6 +31,13 @@ pub struct SourceCharacter {
 pub struct TarFile {
     pub header: TarHeader,
     pub content: Vec<u8>,
+}
+
+impl TarFile {
+    /// The user-defined attributes of this file entry.
+    pub fn attributes(&self) -> EntryAttributes<'_> {
+        EntryAttributes::from_header(&self.header)
+    }
 }
 
 pub struct SourceDocument<'text> {
