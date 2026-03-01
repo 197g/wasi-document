@@ -79,11 +79,13 @@ fn merge_wasm(project: &Work) -> Result<(), Box<dyn std::error::Error>> {
             push(tar::TarItem::Entry(html_and_tar::Entry {
                 name: "boot/init",
                 data: &bootable,
+                attributes: Default::default(),
             }));
 
             push(tar::TarItem::Entry(html_and_tar::Entry {
                 name: "boot/wah-init.wasm",
                 data: &bootable,
+                attributes: Default::default(),
             }));
 
             // Note: maybe we want to tag them as by their minor device number?
@@ -112,6 +114,7 @@ fn merge_wasm(project: &Work) -> Result<(), Box<dyn std::error::Error>> {
                     push(tar::TarItem::Entry(html_and_tar::Entry {
                         name,
                         data: &data,
+                        attributes: Default::default(),
                     }));
                 }
             }
@@ -145,6 +148,7 @@ fn rebuild_wasm(project: &Work, file: PathBuf) -> Result<(), Box<dyn std::error:
         Some(html_and_tar::Entry {
             name: cstr.to_str().ok()?,
             data: content,
+            attributes: Default::default(),
         })
     });
 

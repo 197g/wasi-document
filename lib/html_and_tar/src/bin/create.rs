@@ -31,6 +31,7 @@ fn main() {
         let data = engine.escaped_base64(Entry {
             name: "example0",
             data: b"Hello, world!",
+            attributes: Default::default(),
         });
 
         seq_of_bytes.push(data.padding);
@@ -44,6 +45,7 @@ fn main() {
             name: "InWonderland",
             realsize: 6,
             reference: "Go ask Alice",
+            attributes: Default::default(),
         });
         seq_of_bytes.push(data.padding);
 
@@ -56,6 +58,7 @@ fn main() {
         let data = engine.escaped_base64(Entry {
             name: "Emporingen",
             data: b"Off with their heads",
+            attributes: Default::default(),
         });
         seq_of_bytes.push(data.padding);
 

@@ -20,6 +20,7 @@
 ///   content is technically wrong (only links allowed in head with scripts off) but eh. If you're
 ///   using this document then you have scripts on and then everything is permissible.
 use core::ops::Range;
+use std::ffi::CStr;
 
 // See resilience, this text can be rewritten by the browser with line feeds and we can restore the
 // original contents just fine.
@@ -35,17 +36,6 @@ mod bytemuck {
         let len = core::mem::size_of_val(tar);
         unsafe { &mut *core::slice::from_raw_parts_mut(tar as *mut _ as *mut u8, len) }
     }
-}
-
-#[derive(Default)]
-pub struct TarEngine {
-    len: u64,
-    is_escaped: bool,
-}
-
-#[derive(Default)]
-pub struct TarDecompiler {
-    len: u64,
 }
 
 #[repr(C)]
@@ -71,11 +61,179 @@ pub struct TarHeader {
     __padding: [u8; 12],
 }
 
+impl TarHeader {
+    pub fn as_bytes(&self) -> &[u8] {
+        bytemuck::bytes_of(self)
+    }
+
+    pub fn assign_from_bytes(&mut self, data: &[u8; 512]) {
+        bytemuck::bytes_of_mut(self).copy_from_slice(data);
+    }
+
+    pub fn assign_permission_encoding_meta(&mut self) {
+        self.mode.copy_from_slice(b"0000644\0");
+        // The usual id for nobody, 65534, in octal is 177776
+        self.uid.copy_from_slice(b"0177776\0");
+        self.gid.copy_from_slice(b"0177776\0");
+        // FIXME: well the project began here.
+        self.mtime.copy_from_slice(b"14707041774\0");
+        // Use standard star header, this is _not_ an old style GNU header.
+        self.magic = *b"ustar\0";
+        self.version = *b"  ";
+        self.uname[..7].copy_from_slice(b"nobody\0");
+        self.gname[..7].copy_from_slice(b"nobody\0");
+    }
+
+    pub fn assign_attributes(&mut self, extras: &EntryAttributes) {
+        if let Some(mtime) = extras.mtime {
+            let mtime = mtime
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_else(|_| Default::default())
+                .as_secs();
+            let bytes = format!("{mtime:011o}\0");
+            self.mtime.copy_from_slice(bytes.as_bytes());
+        }
+
+        if let Some(uname) = extras.uname {
+            let uname_bytes = uname.as_bytes();
+            assert!(uname_bytes.len() < self.uname.len() - 1);
+            self.uname[..uname_bytes.len()].copy_from_slice(uname_bytes);
+            self.uname[uname_bytes.len()] = b'\0';
+        }
+
+        if let Some(gname) = extras.gname {
+            let gname_bytes = gname.as_bytes();
+            assert!(gname_bytes.len() < self.gname.len() - 1);
+            self.gname[..gname_bytes.len()].copy_from_slice(gname_bytes);
+            self.gname[gname_bytes.len()] = b'\0';
+        }
+
+        let devmajor = format!("{:o}\0", extras.devmajor);
+        self.devmajor[..devmajor.len()].copy_from_slice(devmajor.as_bytes());
+        let devminor = format!("{:o}\0", extras.devminor);
+        self.devminor[..devminor.len()].copy_from_slice(devminor.as_bytes());
+    }
+
+    pub fn assign_checksum(&mut self) {
+        let mut acc = 0u32;
+
+        for by in &mut self.chksum {
+            *by = b' ';
+        }
+
+        for &by in self.as_bytes() {
+            acc += u32::from(by);
+        }
+
+        let bytes = format!("{acc:06o}\0 ");
+        self.chksum.copy_from_slice(bytes.as_bytes());
+    }
+
+    fn assign_size(&mut self, size: usize) {
+        let bytes = format!("{size:011o}\0");
+        // Note: this is numeric, so can not contain a closing quote.
+        self.size.copy_from_slice(bytes.as_bytes());
+    }
+
+    pub fn parse_size(&self) -> Result<u64, core::num::ParseIntError> {
+        if self.size[0] == b'\0' {
+            return Ok(0);
+        };
+
+        let size_str = core::str::from_utf8(&self.size)
+            .unwrap()
+            .trim_end_matches('\0');
+        u64::from_str_radix(size_str, 8)
+    }
+
+    pub const EMPTY: Self = TarHeader {
+        name: [0; 100],
+        mode: [0; 8],
+        uid: [0; 8],
+        gid: [0; 8],
+        size: [0; 12],
+        mtime: [0; 12],
+        chksum: [0; 8],
+        typeflag: 0,
+        linkname: [0; 100],
+        magic: [0; 6],
+        version: [0; 2],
+        uname: [0; 32],
+        gname: [0; 32],
+        devmajor: [0; 8],
+        devminor: [0; 8],
+        prefix: [0; 155],
+        __padding: [0; 12],
+    };
+}
+
 pub struct Entry<'la> {
     /// An ascii name for this file.
     pub name: &'la str,
     /// The data in its raw form. It will be re-encoded to be HTML safe.
     pub data: &'la [u8],
+    /// The metadata for this file.
+    pub attributes: EntryAttributes<'la>,
+}
+
+#[derive(Clone, Copy)]
+pub struct EntryAttributes<'la> {
+    pub mtime: Option<std::time::SystemTime>,
+    pub uname: Option<&'la str>,
+    pub gname: Option<&'la str>,
+    pub devmajor: u16,
+    pub devminor: u16,
+}
+
+impl<'la> EntryAttributes<'la> {
+    /// Extract the metadata from an existing tar header.
+    pub fn from_header(header: &'la TarHeader) -> Self {
+        let mtime = CStr::from_bytes_until_nul(&header.mtime)
+            .ok()
+            .and_then(|cstr| cstr.to_str().ok())
+            .and_then(|mtime| u64::from_str_radix(mtime, 8).ok())
+            .map(|secs| std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs));
+
+        let uname = CStr::from_bytes_until_nul(&header.uname)
+            .ok()
+            .and_then(|cstr| cstr.to_str().ok());
+
+        let gname = CStr::from_bytes_until_nul(&header.gname)
+            .ok()
+            .and_then(|cstr| cstr.to_str().ok());
+
+        let devmajor = CStr::from_bytes_until_nul(&header.devmajor)
+            .ok()
+            .and_then(|cstr| cstr.to_str().ok())
+            .and_then(|dev| u16::from_str_radix(dev, 8).ok())
+            .unwrap_or(0);
+
+        let devminor = CStr::from_bytes_until_nul(&header.devminor)
+            .ok()
+            .and_then(|cstr| cstr.to_str().ok())
+            .and_then(|dev| u16::from_str_radix(dev, 8).ok())
+            .unwrap_or(0);
+
+        EntryAttributes {
+            mtime,
+            uname,
+            gname,
+            devmajor,
+            devminor,
+        }
+    }
+}
+
+impl Default for EntryAttributes<'_> {
+    fn default() -> Self {
+        Self {
+            mtime: None,
+            uname: None,
+            gname: None,
+            devmajor: 0,
+            devminor: 0,
+        }
+    }
 }
 
 pub struct External<'la> {
@@ -85,6 +243,8 @@ pub struct External<'la> {
     pub realsize: u64,
     /// Where we store this data in actuality.
     pub reference: &'la str,
+    /// The metadata for this file.
+    pub attributes: EntryAttributes<'la>,
 }
 
 pub struct InitialEscape {
@@ -125,6 +285,12 @@ pub enum ParsedEscape {
 pub enum ParsedFileData {
     Data(Vec<u8>),
     Nothing,
+}
+
+#[derive(Default)]
+pub struct TarEngine {
+    len: u64,
+    is_escaped: bool,
 }
 
 impl TarEngine {
@@ -202,11 +368,20 @@ impl TarEngine {
         name
     }
 
-    pub fn escaped_base64(&mut self, Entry { name, data }: Entry) -> EscapedData {
+    pub fn escaped_base64(
+        &mut self,
+        Entry {
+            name,
+            data,
+            attributes: extras,
+        }: Entry,
+    ) -> EscapedData {
         let qualname = Self::qualify_name_for_html_attribute(name);
         let data = STANDARD.encode(data).into_bytes();
 
-        self.continue_qualified(qualname, data, |_, _| {})
+        self.continue_qualified(qualname, data, |_, file| {
+            file.assign_attributes(&extras);
+        })
     }
 
     pub fn escaped_external(
@@ -215,6 +390,7 @@ impl TarEngine {
             name,
             realsize,
             reference,
+            attributes: extras,
         }: External,
     ) -> EscapedData {
         let qualname = Self::qualify_name_for_html_attribute(name);
@@ -222,6 +398,9 @@ impl TarEngine {
 
         self.continue_qualified(qualname, Vec::new(), |_, file| {
             let realsize_off = 452 - 345;
+
+            // This does not assign any of the below fields but anyways.
+            file.assign_attributes(&extras);
 
             file.linkname[1..][..qualref.len()].copy_from_slice(qualref.as_bytes());
             file.typeflag = b'S';
@@ -362,6 +541,12 @@ impl TarEngine {
     }
 }
 
+/// Engine for turning a tar archive written by us into its constituent parts.
+#[derive(Default)]
+pub struct TarDecompiler {
+    len: u64,
+}
+
 impl TarDecompiler {
     pub fn start_of_file(&mut self, data: &[u8]) -> ParsedInitial {
         assert!(data.len() >= core::mem::size_of::<TarHeader>());
@@ -495,78 +680,24 @@ impl TarDecompiler {
     }
 }
 
-impl TarHeader {
-    pub fn as_bytes(&self) -> &[u8] {
-        bytemuck::bytes_of(self)
-    }
-
-    pub fn assign_from_bytes(&mut self, data: &[u8; 512]) {
-        bytemuck::bytes_of_mut(self).copy_from_slice(data);
-    }
-
-    pub fn assign_permission_encoding_meta(&mut self) {
-        self.mode.copy_from_slice(b"0000644\0");
-        // The usual id for nobody, 65534, in octal is 177776
-        self.uid.copy_from_slice(b"0177776\0");
-        self.gid.copy_from_slice(b"0177776\0");
-        // FIXME: well the project began here.
-        self.mtime.copy_from_slice(b"14707041774\0");
-        // Use standard star header, this is _not_ an old style GNU header.
-        self.magic = *b"ustar\0";
-        self.version = *b"  ";
-        self.uname[..7].copy_from_slice(b"nobody\0");
-        self.gname[..7].copy_from_slice(b"nobody\0");
-    }
-
-    pub fn assign_checksum(&mut self) {
-        let mut acc = 0u32;
-
-        for by in &mut self.chksum {
-            *by = b' ';
-        }
-
-        for &by in self.as_bytes() {
-            acc += u32::from(by);
-        }
-
-        let bytes = format!("{acc:06o}\0 ");
-        self.chksum.copy_from_slice(bytes.as_bytes());
-    }
-
-    fn assign_size(&mut self, size: usize) {
-        let bytes = format!("{size:011o}\0");
-        // Note: this is numeric, so can not contain a closing quote.
-        self.size.copy_from_slice(bytes.as_bytes());
-    }
-
-    pub fn parse_size(&self) -> Result<u64, core::num::ParseIntError> {
-        if self.size[0] == b'\0' {
-            return Ok(0);
-        };
-
-        let size_str = core::str::from_utf8(&self.size)
-            .unwrap()
-            .trim_end_matches('\0');
-        u64::from_str_radix(size_str, 8)
-    }
-
-    pub const EMPTY: Self = TarHeader {
-        name: [0; 100],
-        mode: [0; 8],
-        uid: [0; 8],
-        gid: [0; 8],
-        size: [0; 12],
-        mtime: [0; 12],
-        chksum: [0; 8],
-        typeflag: 0,
-        linkname: [0; 100],
-        magic: [0; 6],
-        version: [0; 2],
-        uname: [0; 32],
-        gname: [0; 32],
-        devmajor: [0; 8],
-        devminor: [0; 8],
-        prefix: [0; 155],
-        __padding: [0; 12],
+#[test]
+fn test_tar_header() {
+    let attributes = EntryAttributes {
+        mtime: Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1234)),
+        uname: Some("alice"),
+        gname: Some("bob"),
+        devmajor: 42,
+        devminor: 24,
     };
+
+    let mut header = TarHeader::EMPTY;
+    header.assign_attributes(&attributes);
+    header.assign_checksum();
+
+    let after = EntryAttributes::from_header(&header);
+    assert_eq!(after.mtime, attributes.mtime);
+    assert_eq!(after.uname, attributes.uname);
+    assert_eq!(after.gname, attributes.gname);
+    assert_eq!(after.devmajor, attributes.devmajor);
+    assert_eq!(after.devminor, attributes.devminor);
 }
