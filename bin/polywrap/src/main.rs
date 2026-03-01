@@ -193,6 +193,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             pushed_data.push(engine.escaped_base64(html_and_tar::Entry {
                 name: "boot/wah-init.wasm",
                 data: &binary_wasm,
+                attributes: Default::default(),
             }));
 
             if let Some(zip) = args.zip {
@@ -213,8 +214,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let mut data = vec![];
                     file.read_to_end(&mut data)?;
 
-                    let entry =
-                        engine.escaped_base64(html_and_tar::Entry { name, data: &data });
+                    let entry = engine.escaped_base64(html_and_tar::Entry {
+                        name,
+                        data: &data,
+                        attributes: Default::default(),
+                    });
 
                     pushed_data.push(entry);
                 }
@@ -243,8 +247,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     let data = std::fs::read(&full_path)?;
 
-                    let entry =
-                        engine.escaped_base64(html_and_tar::Entry { name, data: &data });
+                    let entry = engine.escaped_base64(html_and_tar::Entry {
+                        name,
+                        data: &data,
+                        attributes: Default::default(),
+                    });
 
                     pushed_data.push(entry);
                 }

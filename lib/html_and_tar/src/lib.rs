@@ -140,9 +140,11 @@ impl TarHeader {
             return Ok(0);
         };
 
-        let size_str = core::str::from_utf8(&self.size)
-            .unwrap()
-            .trim_end_matches('\0');
+        let size_str = CStr::from_bytes_until_nul(&self.size)
+            .ok()
+            .and_then(|cstr| cstr.to_str().ok())
+            .unwrap_or("");
+
         u64::from_str_radix(size_str, 8)
     }
 
@@ -286,6 +288,32 @@ pub enum ParsedFileData {
     Data(Vec<u8>),
     Nothing,
 }
+
+pub enum TarError {
+    NotAStart,
+    Num(core::num::ParseIntError),
+    NotEnoughData,
+    NotAnExpectedEscape,
+}
+
+impl core::fmt::Debug for TarError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            TarError::NotAStart => write!(f, "this does not look like a tar+html header"),
+            TarError::Num(e) => write!(f, "could not parse number in the tar header: {e}"),
+            TarError::NotEnoughData => write!(f, "not enough data to iterate tar structure"),
+            TarError::NotAnExpectedEscape => write!(f, "the escape ends in an unexpected way"),
+        }
+    }
+}
+
+impl core::fmt::Display for TarError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        core::fmt::Debug::fmt(self, f)
+    }
+}
+
+impl std::error::Error for TarError {}
 
 #[derive(Default)]
 pub struct TarEngine {
@@ -548,41 +576,52 @@ pub struct TarDecompiler {
 }
 
 impl TarDecompiler {
-    pub fn start_of_file(&mut self, data: &[u8]) -> ParsedInitial {
+    pub fn start_of_file(&mut self, data: &[u8]) -> Result<ParsedInitial, TarError> {
         assert!(data.len() >= core::mem::size_of::<TarHeader>());
 
         let mut this = TarHeader::EMPTY;
         this.assign_from_bytes(data[..512].try_into().unwrap());
         assert_eq!(this.typeflag, b'x');
 
-        let size = this.parse_size().unwrap();
+        let size = this.parse_size().map_err(TarError::Num)?;
         self.len += core::mem::size_of::<TarHeader>() as u64;
         self.len += size;
 
         // We ended the original header data before its closing tag and then append 6 bytes of
         // an extra superfluous attribute introducer to it.
-        let end_of_original_header = this.name[1..].iter().position(|&b| b == b'\0').unwrap() - 6;
+        let original_header =
+            CStr::from_bytes_until_nul(&this.name[1..]).map_err(|_| TarError::NotAStart)?;
+        let end_of_original_header = original_header.to_bytes().len();
+
+        if end_of_original_header <= 6 {
+            return Err(TarError::NotAStart);
+        }
+
         // Now find where the closing tag is. Which is part of the original data since we skipped
         // it otherwise.
-        let continues = data[512..].iter().position(|&b| b == b'>').unwrap();
+        let continues = data[512..]
+            .iter()
+            .position(|&b| b == b'>')
+            .ok_or(TarError::NotAStart)?;
 
-        ParsedInitial {
-            header: 1..end_of_original_header,
+        Ok(ParsedInitial {
+            header: 1..end_of_original_header - 6,
             continues: 512 + continues..self.len as usize,
-        }
+        })
     }
 
-    pub fn escaped_data(&self, data: &[u8], escape: &ParsedEscape) -> ParsedFileData {
+    pub fn escaped_data(
+        &self,
+        data: &[u8],
+        escape: &ParsedEscape,
+    ) -> Result<ParsedFileData, TarError> {
         match escape {
             ParsedEscape::Entry(header, range) => {
-                let Some(data) = data.get(range.clone()) else {
-                    panic!("Ran out of data while looking for file data");
-                };
-
-                Self::file_data(header, data)
+                let data = data.get(range.clone()).ok_or(TarError::NotEnoughData)?;
+                Ok(Self::file_data(header, data))
             }
             ParsedEscape::EndOfEscapes { .. } | ParsedEscape::Eof { .. } => {
-                return ParsedFileData::Nothing;
+                Ok(ParsedFileData::Nothing)
             }
         }
     }
@@ -602,33 +641,34 @@ impl TarDecompiler {
         ParsedFileData::Data(STANDARD.decode(data).unwrap())
     }
 
-    pub fn next_escape(&mut self, data: &[u8]) -> ParsedEscape {
+    pub fn next_escape(&mut self, data: &[u8]) -> Result<ParsedEscape, TarError> {
         self.next_double_header(data)
     }
 
-    pub fn continue_escape(&mut self, data: &[u8]) -> ParsedEscape {
-        let mut esc = self.next_double_header(data);
+    pub fn continue_escape(&mut self, data: &[u8]) -> Result<ParsedEscape, TarError> {
+        let mut esc = self.next_double_header(data)?;
 
         if let ParsedEscape::Eof { end } = &mut esc {
             const TERMINATOR: &[u8] = b"</noscript>";
-            assert_eq!(data[*end..][..TERMINATOR.len()], *TERMINATOR);
+
+            if data[*end..][..TERMINATOR.len()] != *TERMINATOR {
+                return Err(TarError::NotAnExpectedEscape);
+            }
+
             // We have added the `</template>` outside any header so we need to also skip it here.
             *end += TERMINATOR.len();
         }
 
-        esc
+        Ok(esc)
     }
 
-    fn next_double_header(&mut self, data: &[u8]) -> ParsedEscape {
+    fn next_double_header(&mut self, data: &[u8]) -> Result<ParsedEscape, TarError> {
         self.pad_to_fit();
 
-        let Some(data) = data.get(self.len as usize..) else {
-            panic!("Ran out of data while looking for next double header");
-        };
-
-        let Some(header) = data.get(..512) else {
-            panic!("Ran out of data while looking for next double header");
-        };
+        let data = data
+            .get(self.len as usize..)
+            .ok_or(TarError::NotEnoughData)?;
+        let header = data.get(..512).ok_or(TarError::NotEnoughData)?;
 
         let mut extension = TarHeader::EMPTY;
         extension.assign_from_bytes(header.try_into().unwrap());
@@ -639,14 +679,12 @@ impl TarDecompiler {
             let start_of_data = self.len as usize;
             self.len += size;
             let end_of_data = self.len as usize;
-            return ParsedEscape::EndOfEscapes {
+            return Ok(ParsedEscape::EndOfEscapes {
                 html_data: start_of_data..end_of_data,
-            };
+            });
         }
 
-        let Some(file_raw) = data.get(512..1024) else {
-            panic!("Ran out of data while looking for next double header");
-        };
+        let file_raw = data.get(512..1024).ok_or(TarError::NotEnoughData)?;
 
         let mut file = TarHeader::EMPTY;
         file.assign_from_bytes(file_raw.try_into().unwrap());
@@ -658,9 +696,9 @@ impl TarDecompiler {
         {
             self.len += core::mem::size_of::<TarHeader>() as u64 * 2;
 
-            return ParsedEscape::Eof {
+            return Ok(ParsedEscape::Eof {
                 end: self.len as usize,
-            };
+            });
         }
 
         self.len += core::mem::size_of::<TarHeader>() as u64 * 2;
@@ -669,10 +707,15 @@ impl TarDecompiler {
         self.len += size;
         let file_end = self.len as usize;
 
-        assert_eq!(extension.typeflag, b'x');
-        assert_eq!(extension.parse_size(), Ok(0));
+        if extension.typeflag != b'x' {
+            return Err(TarError::NotAnExpectedEscape);
+        }
 
-        ParsedEscape::Entry(file, file_start..file_end)
+        if extension.parse_size().map_err(TarError::Num)? != 0 {
+            return Err(TarError::NotAnExpectedEscape);
+        }
+
+        Ok(ParsedEscape::Entry(file, file_start..file_end))
     }
 
     fn pad_to_fit(&mut self) {

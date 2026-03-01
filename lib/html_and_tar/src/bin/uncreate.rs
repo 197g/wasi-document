@@ -9,18 +9,21 @@ fn main() {
     let mut stdin = std::io::stdin();
     let mut data = Vec::new();
     stdin.read_to_end(&mut data).unwrap();
+    uncompile(&data).unwrap();
+}
 
+fn uncompile(data: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
     let mut decompiler = TarDecompiler::default();
-    let initial = decompiler.start_of_file(&data);
+    let initial = decompiler.start_of_file(data)?;
     let mut ranges = vec![initial.header, initial.continues];
 
     let mut is_in_escape = false;
     loop {
         let parsed = if is_in_escape {
-            decompiler.continue_escape(&data)
+            decompiler.continue_escape(data)
         } else {
-            decompiler.next_escape(&data)
-        };
+            decompiler.next_escape(data)
+        }?;
 
         match parsed {
             ParsedEscape::Entry(file, _) => {
@@ -41,6 +44,8 @@ fn main() {
 
     let mut stdout = std::io::stdout();
     for range in ranges {
-        stdout.write_all(&data[range]).unwrap();
+        stdout.write_all(&data[range])?;
     }
+
+    Ok(())
 }
