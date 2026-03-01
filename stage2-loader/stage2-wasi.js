@@ -631,7 +631,7 @@ async function worker_mount({
 
   const [body_wasm, body_file] = response.body.tee();
 
-  let wasm = await WebAssembly.compileStreaming(new Response(body_wasm, {
+  let kernel_wasm = await WebAssembly.compileStreaming(new Response(body_wasm, {
       'status': response.status,
       'statusText': response.statusText,
       'headers': response.headers,
@@ -654,7 +654,7 @@ async function worker_mount({
     env: [],
     fds: [],
     wasm: await body_to_array_buffer(response, body_file),
-    wasm_module: wasm,
+    wasm_module: kernel_wasm,
   };
 
   let trigger_fallback = (configuration, error) => {
@@ -668,7 +668,7 @@ async function worker_mount({
     });
   };
 
-  let wah_wasi_config_data = WebAssembly.Module.customSections(wasm, 'wah_wasi_config');
+  let wah_wasi_config_data = WebAssembly.Module.customSections(kernel_wasm, 'wah_wasi_config');
   wah_wasi_config_data.unshift(new TextEncoder('utf-8').encode('{}'));
 
   if (wah_wasi_config_data.length > 1) {
@@ -763,7 +763,7 @@ async function worker_mount({
       // Do we want to support compiling modules already at this point?
       (what) => {
         instr_debugging('wasm', ops[what]);
-        return WebAssembly.Module.customSections(wasm, ops[what]);
+        return WebAssembly.Module.customSections(kernel_wasm, ops[what]);
       },
       /* 14: no-op */
       function() {
@@ -846,15 +846,12 @@ async function worker_mount({
   }
 
   configuration.wasi = new WASI(args, env, fds);
-  const boot_exe = filesystem.path_open(0, "boot/init", 0).fd_obj;
 
-  // FIXME: error handling?
-  // If this is still something then let's replace.
-  const primary_wasm = await WebAssembly.compileStreaming(new Response(
-    new Blob([boot_exe.file.data.buffer], { type: 'application/javascript' }),
-    { 'headers': response.headers }));
-
-  let inst = await WebAssembly.instantiate(primary_wasm, {
+  // NOTE: Override from disk (reload `boot/wah-init.wasm` for instance)?
+  // Stage-0 did the hand-off here. The argument allows others to setup
+  // chain-loading into this loader without having to touch the disk. I think I
+  // like that better than some generic configurability without a clear goal.
+  let inst = await WebAssembly.instantiate(kernel_wasm, {
     "wasi_snapshot_preview1": configuration.wasi.wasiImport,
   });
 
