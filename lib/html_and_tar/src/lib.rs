@@ -94,14 +94,14 @@ impl TarHeader {
             self.mtime.copy_from_slice(bytes.as_bytes());
         }
 
-        if let Some(uname) = extras.uname {
+        if let Some(HtmlAttributeSafeName(uname)) = extras.uname {
             let uname_bytes = uname.as_bytes();
             assert!(uname_bytes.len() < self.uname.len() - 1);
             self.uname[..uname_bytes.len()].copy_from_slice(uname_bytes);
             self.uname[uname_bytes.len()] = b'\0';
         }
 
-        if let Some(gname) = extras.gname {
+        if let Some(HtmlAttributeSafeName(gname)) = extras.gname {
             let gname_bytes = gname.as_bytes();
             assert!(gname_bytes.len() < self.gname.len() - 1);
             self.gname[..gname_bytes.len()].copy_from_slice(gname_bytes);
@@ -169,9 +169,40 @@ impl TarHeader {
     };
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct HtmlAttributeSafeName<'la>(pub &'la str);
+
+impl<'la> HtmlAttributeSafeName<'la> {
+    pub const fn new(name: &'la str) -> Result<Self, TarError> {
+        if !name.is_ascii() {
+            return Err(TarError::NameNotAscii);
+        }
+
+        // FIXME: more permissive than reality.
+        'contains_bytes: {
+            let bytes = name.as_bytes();
+            let mut i = 0;
+
+            loop {
+                if i >= bytes.len() {
+                    break 'contains_bytes;
+                }
+
+                if bytes[i] == b'"' {
+                    return Err(TarError::NameHasHtmlEscapes);
+                }
+
+                i += 1;
+            }
+        };
+
+        Ok(HtmlAttributeSafeName(name))
+    }
+}
+
 pub struct Entry<'la> {
     /// An ascii name for this file.
-    pub name: &'la str,
+    pub name: HtmlAttributeSafeName<'la>,
     /// The data in its raw form. It will be re-encoded to be HTML safe.
     pub data: &'la [u8],
     /// The metadata for this file.
@@ -181,8 +212,8 @@ pub struct Entry<'la> {
 #[derive(Clone, Copy)]
 pub struct EntryAttributes<'la> {
     pub mtime: Option<std::time::SystemTime>,
-    pub uname: Option<&'la str>,
-    pub gname: Option<&'la str>,
+    pub uname: Option<HtmlAttributeSafeName<'la>>,
+    pub gname: Option<HtmlAttributeSafeName<'la>>,
     pub devmajor: u16,
     pub devminor: u16,
 }
@@ -218,8 +249,8 @@ impl<'la> EntryAttributes<'la> {
 
         EntryAttributes {
             mtime,
-            uname,
-            gname,
+            uname: uname.map(HtmlAttributeSafeName),
+            gname: gname.map(HtmlAttributeSafeName),
             devmajor,
             devminor,
         }
@@ -240,11 +271,11 @@ impl Default for EntryAttributes<'_> {
 
 pub struct External<'la> {
     /// An ascii name for this file.
-    pub name: &'la str,
+    pub name: HtmlAttributeSafeName<'la>,
     /// The real byte length of the file.
     pub realsize: u64,
     /// Where we store this data in actuality.
-    pub reference: &'la str,
+    pub reference: HtmlAttributeSafeName<'la>,
     /// The metadata for this file.
     pub attributes: EntryAttributes<'la>,
 }
@@ -290,6 +321,8 @@ pub enum ParsedFileData {
 }
 
 pub enum TarError {
+    NameNotAscii,
+    NameHasHtmlEscapes,
     NotAStart,
     Num(core::num::ParseIntError),
     NotEnoughData,
@@ -299,6 +332,11 @@ pub enum TarError {
 impl core::fmt::Debug for TarError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            TarError::NameNotAscii => write!(f, "file names must be ASCII"),
+            TarError::NameHasHtmlEscapes => write!(
+                f,
+                "file names must not contain characters that can go unescaped in HTML attributes"
+            ),
             TarError::NotAStart => write!(f, "this does not look like a tar+html header"),
             TarError::Num(e) => write!(f, "could not parse number in the tar header: {e}"),
             TarError::NotEnoughData => write!(f, "not enough data to iterate tar structure"),
@@ -384,18 +422,6 @@ impl TarEngine {
         }
     }
 
-    fn qualify_name_for_html_attribute(name: &str) -> &str {
-        assert!(name.is_ascii(), "Name must be ascii");
-
-        // FIXME: more permissive than reality.
-        assert!(
-            name.chars().all(|c| c != '\"'),
-            "Name {name} must be HTML compatible without escapes"
-        );
-
-        name
-    }
-
     pub fn escaped_base64(
         &mut self,
         Entry {
@@ -404,14 +430,14 @@ impl TarEngine {
             attributes: extras,
         }: Entry,
     ) -> EscapedData {
-        let qualname = Self::qualify_name_for_html_attribute(name);
         let data = STANDARD.encode(data).into_bytes();
 
-        self.continue_qualified(qualname, data, |_, file| {
+        self.continue_qualified(name, data, |_, file| {
             file.assign_attributes(&extras);
         })
     }
 
+    /// Insert a link to external data.
     pub fn escaped_external(
         &mut self,
         External {
@@ -421,10 +447,8 @@ impl TarEngine {
             attributes: extras,
         }: External,
     ) -> EscapedData {
-        let qualname = Self::qualify_name_for_html_attribute(name);
-        let qualref = Self::qualify_name_for_html_attribute(reference);
-
-        self.continue_qualified(qualname, Vec::new(), |_, file| {
+        self.continue_qualified(name, Vec::new(), |_, file| {
+            let HtmlAttributeSafeName(qualref) = reference;
             let realsize_off = 452 - 345;
 
             // This does not assign any of the below fields but anyways.
@@ -434,13 +458,12 @@ impl TarEngine {
             file.typeflag = b'S';
             file.prefix[realsize_off..][..11]
                 .copy_from_slice(format!("{realsize:011o}").as_bytes());
-            // file.__padding[8..].copy_from_slice(b"tar\0");
         })
     }
 
     fn continue_qualified(
         &mut self,
-        qualname: &str,
+        HtmlAttributeSafeName(qualname): HtmlAttributeSafeName,
         data: Vec<u8>,
         hook: impl FnOnce(&mut TarHeader, &mut TarHeader),
     ) -> EscapedData {
@@ -727,8 +750,8 @@ impl TarDecompiler {
 fn test_tar_header() {
     let attributes = EntryAttributes {
         mtime: Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1234)),
-        uname: Some("alice"),
-        gname: Some("bob"),
+        uname: Some(HtmlAttributeSafeName("alice")),
+        gname: Some(HtmlAttributeSafeName("bob")),
         devmajor: 42,
         devminor: 24,
     };

@@ -1,7 +1,7 @@
 const HTML: &str = include_str!("example.html");
 use std::{borrow::Cow, io::Write as _};
 
-use html_and_tar::{Entry, External, TarEngine};
+use html_and_tar::{Entry, External, HtmlAttributeSafeName, TarEngine};
 
 fn main() {
     const HTMLTAG: &str = "<html";
@@ -29,7 +29,7 @@ fn main() {
 
     {
         let data = engine.escaped_base64(Entry {
-            name: "example0",
+            name: HtmlAttributeSafeName::new("example0").unwrap(),
             data: b"Hello, world!",
             attributes: Default::default(),
         });
@@ -42,9 +42,9 @@ fn main() {
 
     {
         let data = engine.escaped_external(External {
-            name: "InWonderland",
+            name: HtmlAttributeSafeName::new("InWonderland").unwrap(),
             realsize: 6,
-            reference: "Go ask Alice",
+            reference: HtmlAttributeSafeName::new("Go ask Alice").unwrap(),
             attributes: Default::default(),
         });
         seq_of_bytes.push(data.padding);
@@ -56,7 +56,7 @@ fn main() {
 
     {
         let data = engine.escaped_base64(Entry {
-            name: "Emporingen",
+            name: HtmlAttributeSafeName::new("Emporingen").unwrap(),
             data: b"Off with their heads",
             attributes: Default::default(),
         });

@@ -167,6 +167,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut source = dom::SourceDocument::new(&source);
             let binary_wasm = encoder.finish();
             let source_script = include_bytes!("stage0-html_plus_tar.js");
+            let boot_file = html_and_tar::HtmlAttributeSafeName::new("boot/wah-init.wasm").unwrap();
 
             let structure = source.prepare_tar_structure()?;
 
@@ -191,7 +192,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut pushed_data = vec![];
 
             pushed_data.push(engine.escaped_base64(html_and_tar::Entry {
-                name: "boot/wah-init.wasm",
+                name: boot_file,
                 data: &binary_wasm,
                 attributes: Default::default(),
             }));
@@ -208,6 +209,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     };
 
                     let Some(name) = name.to_str() else {
+                        continue;
+                    };
+
+                    let Ok(name) = html_and_tar::HtmlAttributeSafeName::new(name) else {
                         continue;
                     };
 
@@ -238,6 +243,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     };
 
                     let Some(name) = path.to_str() else {
+                        continue;
+                    };
+
+                    let Ok(name) = html_and_tar::HtmlAttributeSafeName::new(name) else {
                         continue;
                     };
 

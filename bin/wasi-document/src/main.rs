@@ -6,6 +6,7 @@ mod tar;
 use std::{ffi::CStr, io::Write as _, path::PathBuf};
 
 use clap::Parser;
+use html_and_tar::HtmlAttributeSafeName;
 use wasi_document_dom as dom;
 
 use project::Configuration;
@@ -66,6 +67,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
+const BOOT_KERNEL_NAME: HtmlAttributeSafeName =
+    match HtmlAttributeSafeName::new("boot/wah-init.wasm") {
+        Ok(name) => name,
+        Err(_) => panic!("Invalid attribute name, should be hardcoded and valid"),
+    };
+
 fn merge_wasm(project: &Work) -> Result<(), Box<dyn std::error::Error>> {
     let source = std::fs::read_to_string(&project.index_html)?;
     let bootable = finalize_kernel_wasm(&project.kernel, &project.stage2, project)?;
@@ -77,13 +84,7 @@ fn merge_wasm(project: &Work) -> Result<(), Box<dyn std::error::Error>> {
         &mut source,
         |push| {
             push(tar::TarItem::Entry(html_and_tar::Entry {
-                name: "boot/init",
-                data: &bootable,
-                attributes: Default::default(),
-            }));
-
-            push(tar::TarItem::Entry(html_and_tar::Entry {
-                name: "boot/wah-init.wasm",
+                name: BOOT_KERNEL_NAME,
                 data: &bootable,
                 attributes: Default::default(),
             }));
@@ -103,6 +104,11 @@ fn merge_wasm(project: &Work) -> Result<(), Box<dyn std::error::Error>> {
                     };
 
                     let Some(name) = path.to_str() else {
+                        continue;
+                    };
+
+                    let Ok(name) = HtmlAttributeSafeName::new(name) else {
+                        // FIXME: warn or transparently encode? URL-safe sounds nice.
                         continue;
                     };
 
@@ -145,8 +151,13 @@ fn rebuild_wasm(project: &Work, file: PathBuf) -> Result<(), Box<dyn std::error:
     let files = files.iter().flat_map(|file| {
         let wasi_document_dom::TarFile { header, content } = file;
         let cstr = CStr::from_bytes_until_nul(&header.name).ok()?;
+
         Some(html_and_tar::Entry {
-            name: cstr.to_str().ok()?,
+            // FIXME: proper handling. We may omit them but loudly. Note that we do not go through
+            // the `HtmlAttributeSafeName` constructor here. That may produce a broken output file
+            // if the input had a broken filename. Let's be lenient here but a strict mode could
+            // also sometimes be required.
+            name: HtmlAttributeSafeName(cstr.to_str().ok()?),
             data: content,
             attributes: file.attributes(),
         })
