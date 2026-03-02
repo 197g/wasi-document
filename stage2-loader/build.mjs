@@ -16,7 +16,6 @@ let cratePlugin = {
       path: args.path,
       namespace: 'cargo-crate-wasi-ns',
     }));
-    
 
     async function cargo_artifact(args, target) {
       let crate = args.path.replace(/cargo-wa(sm32|si):/, '');
@@ -76,6 +75,14 @@ await esbuild.build({
   plugins: [cratePlugin],
 })
 
+await esbuild.build({
+  entryPoints: ['coep-coop/worker.mjs'],
+  bundle: true,
+  outfile: '../target/coep-coop-worker.mjs',
+  format: 'esm',
+  plugins: [],
+})
+
 // This plugin analyzes our DSL to resolve any JS dependencies needed to setup
 // the environment. It then resolves to a module which exports the instructions
 // and dependencies accordingly.
@@ -122,10 +129,37 @@ let wasiInterpreterPlugin = {
   },
 }
 
+// Include the file as a string, we turn it into a blob URL at runtime.
+let coopcoepPlugin = {
+  name: 'coop-coep-worker',
+  setup(build) {
+    build.onResolve({ filter: /^coop-coep-worker:.*$/ }, args => ({
+      path: args.path,
+      namespace: 'coop-coep-worker-ns',
+    }))
+
+    build.onLoad({ filter: /.*/, namespace: 'coop-coep-worker-ns' }, async args => {
+      console.log('coop-coep-worker contents');
+      const contents = await fs.promises.readFile('../target/coep-coop-worker.mjs');
+
+      return {
+        contents,
+        resolveDir: 'node_modules',
+        loader: 'text',
+      };
+    });
+  }
+
+};
+
 await esbuild.build({
   entryPoints: ['stage2-wasi.js'],
   bundle: true,
   outfile: 'out.js',
   format: 'esm',
-  plugins: [cratePlugin, wasiInterpreterPlugin],
+  plugins: [
+    cratePlugin,
+    wasiInterpreterPlugin
+    /* disabled, this does not work. But see implementation: coopcoepPlugin */
+  ],
 })

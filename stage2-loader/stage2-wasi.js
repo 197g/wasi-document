@@ -104,17 +104,61 @@ async function createSandbox({
 }) {
   const wasmbody = await (await module_or_path).arrayBuffer();
 
+  // We want our actual worker to spawn in a secure context with access to all
+  // SharedArrayBuffer etc. features. We *want* the isolation as well. For
+  // direct access to the page replace the stage-2. So first we spawn our
+  // worker that hooks page fetches. But no, that does not work.
+  //
+  // Service workers are purely http/https because FUCK YOU. I was so close to
+  // forgiving the bumbling of imports (see below) but NO. If you don't let me
+  // cross-isolate my OWN and LOCALHOST page you do not deserve to be touching
+  // HTML/JS technology.
+  //
+  // In the meantime, this graveyard of code stays. It's not only dead, it's an
+  // unliving reminder of aggrevated assault by business model.
+
+  /*
+  // This imported value is a string (through esbuild).
+  import coop_coep from 'coop-coep-worker:main.mjs'
+
+  var worker = await (() => {
+    let modBlob = new Blob([coop_coep], { type: 'text/javascript' });
+
+    let moduleURL = URL.createObjectURL(modBlob);
+    return navigator.serviceWorker.register(moduleURL, { type: 'module', scope: '/' });
+  })();
+
+  {
+    const intercept_ready = Promise.withResolvers();
+
+    worker.postMessage(0);
+    // Now we wait for the worker to signal readiness.
+    worker.onmessage = (event) => {
+      console.log('worker ready', event.data);
+      intercept_ready.resolve(event.data);
+    };
+
+    let readiness = await intercept_ready.promise;
+    console.log(readiness);
+
+    // Let the worker run, it must intercept messages.
+  }*/
+
   // Absurdly hacky way to construct our worker.js source code.
   //
   // Problem 1: If we use `type: module` in the worker definition then Chromium
   //   blocks the worker based on the same-origin policy... Apparently a blob is
-  //   not a safe origin. Google-Centric technology idiots.
+  //   not a safe origin. Google-Centric technology. We can work around this by
+  //   an http-equiv attribute, maybe; however that means the packing page must
+  //   be structurally modified and not everyone wants that meta header (or
+  //   trust us to do the right thing, lol).
   // Problem 2: We ourselves want to be a module for `import` working
   //   consistently in our stage 1 system.
   // Problem 3: Packing this package is the way we introduce all wasi_shim code
   //   into our sources.
   const module_src = await (await fetch(wasi_stage_url)).text();
-  let idx = module_src.search('\nexport ');
+
+  let idx = module_src.search(/(\s|;)export\s/);
   let modBlob = new Blob([module_src.slice(0, idx)], { type: 'text/javascript' });
   let moduleURL = URL.createObjectURL(modBlob);
 
