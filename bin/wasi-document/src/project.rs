@@ -101,11 +101,11 @@ impl Machine {
 }
 
 #[derive(Deserialize, Default)]
-#[serde(rename_all = "PascalCase", deny_unknown_fields)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct WebPack {
     // TODO: have a list of roots here? Do we like the internal logic as external logic? For now
     // setting the domain field means *all* files into the target directory.
-    pub domain: Option<String>,
+    pub url_prefix: Option<String>,
 }
 
 impl WebPack {
@@ -115,10 +115,10 @@ impl WebPack {
     }
 
     pub fn to_roots(&self, build: &BuildEnv) -> Vec<ConfiguredPackRoot> {
-        if let Some(domain) = &self.domain {
+        if let Some(prefix) = &self.url_prefix {
             vec![ConfiguredPackRoot {
                 prefix: "/".to_string(),
-                url: domain.clone(),
+                url: prefix.clone(),
                 path: build.cargo_workspace.target_directory.join("wasi-pack"),
             }]
         } else {
@@ -127,6 +127,7 @@ impl WebPack {
     }
 }
 
+#[derive(Debug)]
 pub struct ConfiguredPackRoot {
     prefix: String,
     url: String,

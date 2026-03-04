@@ -469,7 +469,7 @@ impl TarEngine {
             // This does not assign any of the below fields but anyways.
             file.assign_attributes(&extras);
 
-            file.linkname[1..][..qualref.len()].copy_from_slice(qualref.as_bytes());
+            file.linkname[0..][..qualref.len()].copy_from_slice(qualref.as_bytes());
             file.typeflag = b'S';
             file.prefix[realsize_off..][..11]
                 .copy_from_slice(format!("{realsize:011o}").as_bytes());

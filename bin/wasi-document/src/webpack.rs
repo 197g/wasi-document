@@ -52,15 +52,28 @@ impl Packer {
         };
 
         // FIXME: if we URL escape the prefix match will hold. But if we do not?
-        let raw_name = entry.name.0;
+        let raw_name = format!("/{}", entry.name.0);
 
         for map in &self.maps {
             let Some(relname) = raw_name.strip_prefix(&map.prefix) else {
                 continue;
             };
 
+            let components = Path::new(relname).components().filter(|c| {
+                matches!(
+                    c,
+                    std::path::Component::CurDir | std::path::Component::Normal(_)
+                )
+            });
+
             if let Some(path) = &map.path {
-                let fullpath = path.join(relname);
+                let mut fullpath = path.clone();
+                fullpath.extend(components);
+
+                if let Some(parent) = fullpath.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+
                 std::fs::write(fullpath, entry.data)?;
             }
 

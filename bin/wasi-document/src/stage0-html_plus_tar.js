@@ -113,11 +113,18 @@ window.addEventListener('load', async function() {
       throw 'Bad file';
     }
 
+    function santize_bytes_until_nul(str) {
+      return str.replaceAll(String.fromCodePoint(0xfffd), '\0').replace(/\0.*$/, '');
+    }
+
     // Note we do not attach the DOM element here. We want a clean, pure memory
     // representation of the file system tree here. (That we can send to a
     // worker).
     global.file_objects.push({
       header: {
+        // FIXME: We're parsing here, should that be the responsibility of the
+        // stage-1? There's already a transform there since we hold a reference
+        // to the element until it is dropped when sent to the kernel.
         all: file_header,
         name: givenName,
         mode: file_header?.slice(0, 8) || '',
@@ -126,8 +133,9 @@ window.addEventListener('load', async function() {
         size: file_header ? parseInt(file_header.slice(24, 36), 8) : 0,
         mtime: file_header ? parseInt(file_header.slice(36, 48), 8) : 0,
         typeflag: file_header?.charCodeAt(56) || 0,
-        uname: file_header ? file_header.slice(165, 197).replace(/\0.*$/, '') : '',
-        gname: file_header ? file_header.slice(197, 229).replace(/\0.*$/, '') : '',
+        linkname: file_header ? santize_bytes_until_nul(file_header.slice(57, 157)) : '',
+        uname: file_header ? santize_bytes_until_nul(file_header.slice(165, 197)) : '',
+        gname: file_header ? santize_bytes_until_nul(file_header.slice(197, 229)) : '',
       },
       data: raw_content,
       element: el,

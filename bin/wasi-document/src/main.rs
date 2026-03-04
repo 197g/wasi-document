@@ -89,6 +89,8 @@ fn merge_wasm(project: &Work) -> Result<(), Box<dyn std::error::Error>> {
     let wasm = tar::build(
         &mut source,
         |push| {
+            // We can not externalize the 'kernel' entry since it contains the boot stage 1 file as
+            // well (in a custom section). That seems odd?
             push(tar::TarItem::Entry(html_and_tar::Entry {
                 name: BOOT_KERNEL_NAME,
                 data: &bootable,
