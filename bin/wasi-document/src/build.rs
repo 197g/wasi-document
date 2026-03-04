@@ -6,7 +6,7 @@ use std::{path, process::Command};
 
 pub fn generate(
     configuration: &super::Configuration,
-    cargo_target_dir: Option<&path::Path>,
+    build: &BuildEnv,
 ) -> Result<super::Work, Box<dyn std::error::Error>> {
     let stage2 = run_build(&configuration.machine.stage2)?;
     let stage3 = run_build(&configuration.machine.stage3)?;
@@ -19,7 +19,8 @@ pub fn generate(
     };
 
     if let Some(root) = &configuration.document.install {
-        let builder = crate::cargo::BuildDir::new(cargo_target_dir.map(path::Path::to_path_buf))?;
+        let target_dir = build.target_dir_for_wasm32_wasi().to_owned();
+        let builder = crate::cargo::BuildDir::new(Some(target_dir))?;
 
         let commands = root
             .iter()
@@ -35,7 +36,7 @@ pub fn generate(
         resources.push(Box::new(builder) as Box<dyn std::any::Any>);
     }
 
-    let meta = metadata(path::Path::new("."))?;
+    let packers = configuration.web.to_roots(build);
 
     Ok(super::Work {
         index_html: configuration.document.index_html.clone(),
@@ -43,7 +44,8 @@ pub fn generate(
         kernel: stage3.item,
         edit: false,
         root_fs,
-        out: Some(meta.target_directory.join("wasi.html")),
+        out: Some(build.cargo_workspace.target_directory.join("wasi.html")),
+        packers,
         resources,
     })
 }
@@ -85,9 +87,45 @@ fn run_build(build: &Build) -> Result<BuiltResource, Box<dyn std::error::Error>>
     Ok(BuiltResource { item })
 }
 
+pub struct BuildEnv {
+    pub(crate) cargo_workspace: CargoMetadata,
+    pub(crate) cargo_target_override: Option<path::PathBuf>,
+}
+
+impl BuildEnv {
+    pub fn new(args: &super::Args) -> Result<Self, Box<dyn std::error::Error>> {
+        let project = match args {
+            super::Args::Build { project, .. } | super::Args::Repack { project, .. } => project,
+        };
+
+        let path = match project {
+            None => path::Path::new(".").to_owned(),
+            Some(n) => n.canonicalize()?.parent().unwrap().to_owned(),
+        };
+
+        let cargo_target_override = match args {
+            super::Args::Build { target_dir, .. } => target_dir.clone(),
+            super::Args::Repack { .. } => None,
+        };
+
+        Ok(Self {
+            cargo_workspace: metadata(&path)?,
+            cargo_target_override,
+        })
+    }
+
+    pub fn target_dir_for_wasm32_wasi(&self) -> &path::Path {
+        if let Some(dir) = &self.cargo_target_override {
+            dir
+        } else {
+            self.cargo_workspace.target_directory.as_path()
+        }
+    }
+}
+
 #[derive(serde::Deserialize)]
-struct CargoMetadata {
-    target_directory: path::PathBuf,
+pub(crate) struct CargoMetadata {
+    pub target_directory: path::PathBuf,
 }
 
 fn metadata(build: &path::Path) -> Result<CargoMetadata, Box<dyn std::error::Error>> {

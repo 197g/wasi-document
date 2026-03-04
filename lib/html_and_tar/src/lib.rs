@@ -148,6 +148,16 @@ impl TarHeader {
         u64::from_str_radix(size_str, 8)
     }
 
+    pub fn parse_name(&self) -> Option<HtmlAttributeSafeName<'_>> {
+        let cstr = CStr::from_bytes_until_nul(&self.name).ok()?;
+        Some(HtmlAttributeSafeName(cstr.to_str().ok()?))
+    }
+
+    pub fn parse_link(&self) -> Option<HtmlAttributeSafeName<'_>> {
+        let cstr = CStr::from_bytes_until_nul(&self.linkname).ok()?;
+        Some(HtmlAttributeSafeName(cstr.to_str().ok()?))
+    }
+
     pub const EMPTY: Self = TarHeader {
         name: [0; 100],
         mode: [0; 8],
@@ -273,6 +283,11 @@ pub struct External<'la> {
     /// An ascii name for this file.
     pub name: HtmlAttributeSafeName<'la>,
     /// The real byte length of the file.
+    ///
+    // FIXME: well not sure if we want to support realize anyways. Maybe we end up
+    // sticking it into the header? It seems a bit like checksum metadata. Not
+    // necessary for the entry but an extra attribute. Maybe even interpreted by
+    // stage 2 instead of 1 since we do not have crypto for non-secure pages..
     pub realsize: u64,
     /// Where we store this data in actuality.
     pub reference: HtmlAttributeSafeName<'la>,

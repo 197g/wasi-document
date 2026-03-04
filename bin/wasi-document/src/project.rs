@@ -2,10 +2,13 @@ use std::{io, path::Path, path::PathBuf};
 
 use serde::Deserialize;
 
+use crate::{build::BuildEnv, webpack::PackRoot};
+
 /// The merged tool input configuration.
 pub struct Configuration {
     pub document: Document,
     pub machine: Machine,
+    pub web: WebPack,
 }
 
 impl Configuration {
@@ -13,7 +16,7 @@ impl Configuration {
         let default_cfg = || PathBuf::from("./WasiDocument.toml");
 
         let base = match args {
-            super::Args::Rebuild { project, .. } | super::Args::Build { project, .. } => {
+            super::Args::Build { project, .. } | super::Args::Repack { project, .. } => {
                 project.clone().unwrap_or_else(default_cfg)
             }
         };
@@ -21,6 +24,7 @@ impl Configuration {
         let Project {
             mut document,
             mut machine,
+            web_pack: mut web,
         } = {
             let contents = std::fs::read_to_string(&base)?;
             toml::from_str(&contents)?
@@ -32,8 +36,13 @@ impl Configuration {
 
         document.absolute_paths(&dir);
         machine.absolute_paths(&dir);
+        web.absolute_paths(&dir);
 
-        Ok(Configuration { document, machine })
+        Ok(Configuration {
+            document,
+            machine,
+            web,
+        })
     }
 }
 
@@ -42,6 +51,8 @@ impl Configuration {
 pub struct Project {
     pub document: Document,
     pub machine: Machine,
+    #[serde(default)]
+    pub web_pack: WebPack,
 }
 
 #[derive(Deserialize)]
@@ -89,6 +100,49 @@ impl Machine {
     }
 }
 
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "PascalCase", deny_unknown_fields)]
+pub struct WebPack {
+    // TODO: have a list of roots here? Do we like the internal logic as external logic? For now
+    // setting the domain field means *all* files into the target directory.
+    pub domain: Option<String>,
+}
+
+impl WebPack {
+    pub fn absolute_paths(&mut self, _: &Path) {
+        // No paths to make absolute. For now. But do it on `ConfiguredPackRoot::path` if we add a
+        // vector of roots to the configuration file. (After we decide what that means).
+    }
+
+    pub fn to_roots(&self, build: &BuildEnv) -> Vec<ConfiguredPackRoot> {
+        if let Some(domain) = &self.domain {
+            vec![ConfiguredPackRoot {
+                prefix: "/".to_string(),
+                url: domain.clone(),
+                path: build.cargo_workspace.target_directory.join("wasi-pack"),
+            }]
+        } else {
+            vec![]
+        }
+    }
+}
+
+pub struct ConfiguredPackRoot {
+    prefix: String,
+    url: String,
+    path: PathBuf,
+}
+
+impl ConfiguredPackRoot {
+    pub fn as_root(&self) -> PackRoot<'_> {
+        PackRoot {
+            prefix: &self.prefix,
+            url: &self.url,
+            path: Some(&self.path),
+        }
+    }
+}
+
 /// Options that you can control. Binaries are installed at the root of the packed directory, and
 /// the target is always `wasm32-wasip1`.
 #[derive(Deserialize)]
@@ -117,9 +171,11 @@ pub enum InstallSource {
     Git {
         git: String,
         #[serde(default)]
-        rev: Option<String>
+        rev: Option<String>,
     },
-    Path { path: PathBuf },
+    Path {
+        path: PathBuf,
+    },
     CratesIo,
 }
 

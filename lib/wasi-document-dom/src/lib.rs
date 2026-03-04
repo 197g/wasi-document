@@ -1,7 +1,10 @@
 use core::{error::Error, ops};
 use std::borrow::Cow;
 
-use html_and_tar::{ParsedFileData, EntryAttributes, TarDecompiler, TarHeader};
+use html_and_tar::{
+    Entry, EntryAttributes, External, HtmlAttributeSafeName, ParsedFileData, TarDecompiler,
+    TarHeader,
+};
 use lithtml::{Dom, Element, Node};
 
 pub struct Structure {
@@ -28,15 +31,93 @@ pub struct SourceCharacter {
 /// Basically the data passed as the root FS in stage 1 but in Rust. Can be used to rebuild a file
 /// into tar structure when it was mangled due to intermediate HTML transformations.
 #[derive(Clone)]
-pub struct TarFile {
-    pub header: TarHeader,
-    pub content: Vec<u8>,
+pub struct TarEntryOwned {
+    header: TarHeader,
+    name: String,
+    content: OwnedContent,
+    reference: Option<String>,
 }
 
-impl TarFile {
+// FIXME: since this is a builder, the representation as `(Arc<File>, u64)` is relevant for efficiency.
+#[derive(Clone)]
+enum OwnedContent {
+    Data(Vec<u8>),
+    Reference { opaque: Vec<u8>, realsize: u64 },
+}
+
+impl TarEntryOwned {
+    pub fn from_entry(entry: Entry<'_>) -> Self {
+        TarEntryOwned {
+            header: {
+                let mut empty = TarHeader::EMPTY;
+                empty.assign_attributes(&entry.attributes);
+                empty
+            },
+            name: entry.name.0.to_string(),
+            content: OwnedContent::Data(entry.data.to_vec()),
+            reference: None,
+        }
+    }
+
     /// The user-defined attributes of this file entry.
     pub fn attributes(&self) -> EntryAttributes<'_> {
         EntryAttributes::from_header(&self.header)
+    }
+
+    pub fn as_html_and_tar_entry(&self) -> Option<Entry<'_>> {
+        if self.reference.is_some() {
+            return None;
+        }
+
+        let OwnedContent::Data(data) = &self.content else {
+            return None;
+        };
+
+        let name = HtmlAttributeSafeName::new(&self.name).ok()?;
+        let attributes = self.attributes();
+
+        Some(Entry {
+            name,
+            data,
+            attributes,
+        })
+    }
+
+    /// Size of the data in the file (excluding the header itself).
+    pub fn entry_size(&self) -> u64 {
+        (match &self.content {
+            OwnedContent::Data(data) => data.len(),
+            OwnedContent::Reference { opaque, .. } => opaque.len(),
+        }) as u64
+    }
+
+    pub fn content_size(&self) -> u64 {
+        match &self.content {
+            OwnedContent::Data(data) => data.len() as u64,
+            OwnedContent::Reference { realsize, .. } => *realsize,
+        }
+    }
+
+    pub fn as_html_and_tar_external(&self) -> Option<External<'_>> {
+        let reference = self
+            .reference
+            .as_ref()
+            .and_then(|name| HtmlAttributeSafeName::new(name).ok())?;
+        let name = HtmlAttributeSafeName::new(&self.name).ok()?;
+        let attributes = self.attributes();
+        let realsize = self.content_size();
+
+        Some(External {
+            name,
+            attributes,
+            realsize,
+            reference,
+        })
+    }
+
+    pub fn make_external(&mut self, reference: HtmlAttributeSafeName) {
+        let HtmlAttributeSafeName(reference) = reference;
+        self.reference = Some(reference.to_string());
     }
 }
 
@@ -399,7 +480,7 @@ impl<'text> SourceDocument<'text> {
         parse_tar_tags(self)
     }
 
-    pub fn split_tar_contents(&mut self) -> Result<Vec<TarFile>, Box<dyn Error>> {
+    pub fn split_tar_contents(&mut self) -> Result<Vec<TarEntryOwned>, Box<dyn Error>> {
         // FIXME: the parser can not handle this. Unfortunate.
         let text = self.text.trim_matches('\0');
 
@@ -427,13 +508,39 @@ impl<'text> SourceDocument<'text> {
 
             let bytes = text.trim_matches('\0').trim().as_bytes();
 
-            let content = match TarDecompiler::file_data(&header, bytes) {
-                ParsedFileData::Data(content) => content,
+            let filedata = match TarDecompiler::file_data(&header, bytes) {
+                ParsedFileData::Data(filedata) => filedata,
                 // In fact not a file element.
                 ParsedFileData::Nothing => return None,
             };
 
-            Some(TarFile { header, content })
+            let name = header.parse_name()?.0.to_string();
+
+            let (reference, content);
+
+            if header.typeflag == b'S' {
+                let hsn = header.parse_link()?;
+                // FIXME: this should validate instead.. Or we should change this to never validate
+                // anything with an option to represent invalid entries..
+                reference = Some(hsn.0.to_string());
+
+                content = OwnedContent::Reference {
+                    opaque: filedata,
+                    // See [`External::realsize`], do we want this? So fake for now while
+                    // evaluating.
+                    realsize: 0,
+                };
+            } else {
+                reference = None;
+                content = OwnedContent::Data(filedata);
+            }
+
+            Some(TarEntryOwned {
+                header,
+                name,
+                content,
+                reference,
+            })
         });
 
         let files = files.collect();

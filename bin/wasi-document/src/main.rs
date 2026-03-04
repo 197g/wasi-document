@@ -2,8 +2,9 @@ mod build;
 mod cargo;
 mod project;
 mod tar;
+mod webpack;
 
-use std::{ffi::CStr, io::Write as _, path::PathBuf};
+use std::{io::Write as _, path::PathBuf};
 
 use clap::Parser;
 use html_and_tar::HtmlAttributeSafeName;
@@ -28,8 +29,8 @@ enum Args {
         #[arg(long)]
         target_dir: Option<PathBuf>,
     },
-    /// Rebuild a tar structure from an HTML document that was modified as a DOM.
-    Rebuild {
+    /// Repack a tar structure from an HTML document that was modified as a DOM.
+    Repack {
         #[arg(long)]
         project: Option<PathBuf>,
 
@@ -46,6 +47,8 @@ struct Work {
     root_fs: Vec<PathBuf>,
     out: Option<PathBuf>,
 
+    packers: Vec<project::ConfiguredPackRoot>,
+
     /// Objects that guard a resource required for the others (i.e. tempdirs).
     #[allow(dead_code)]
     resources: Vec<Box<dyn std::any::Any>>,
@@ -54,14 +57,15 @@ struct Work {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
     let project = project::Configuration::load(&args)?;
+    let build = build::BuildEnv::new(&args)?;
 
     match args {
-        Args::Build { target_dir, .. } => {
-            let project = build::generate(&project, target_dir.as_deref())?;
+        Args::Build { .. } => {
+            let project = build::generate(&project, &build)?;
             merge_wasm(&project)
         }
-        Args::Rebuild { file, .. } => {
-            let project = build::generate(&project, None)?;
+        Args::Repack { file, .. } => {
+            let project = build::generate(&project, &build)?;
             rebuild_wasm(&project, file)
         }
     }
@@ -76,9 +80,11 @@ const BOOT_KERNEL_NAME: HtmlAttributeSafeName =
 fn merge_wasm(project: &Work) -> Result<(), Box<dyn std::error::Error>> {
     let source = std::fs::read_to_string(&project.index_html)?;
     let bootable = finalize_kernel_wasm(&project.kernel, &project.stage2, project)?;
+    let roots: Vec<_> = project.packers.iter().map(|pck| pck.as_root()).collect();
 
     let mut source = dom::SourceDocument::new(&source);
     let source_script = minify_js(include_bytes!("stage0-html_plus_tar.js"));
+    let packer = crate::webpack::Packer::from_root(&roots);
 
     let wasm = tar::build(
         &mut source,
@@ -116,12 +122,27 @@ fn merge_wasm(project: &Work) -> Result<(), Box<dyn std::error::Error>> {
                         continue;
                     }
 
+                    // FIXME: should be able to represent the file without reading it into memory.
+                    // We need the size for that, i.e. `html_and_tar` does not want to do the
+                    // metadata read itself to support file descriptors backed not be a filesytem
+                    // with metadata.
                     let data = std::fs::read(&full_path)?;
-                    push(tar::TarItem::Entry(html_and_tar::Entry {
+
+                    let mut entry = dom::TarEntryOwned::from_entry(html_and_tar::Entry {
                         name,
                         data: &data,
                         attributes: Default::default(),
-                    }));
+                    });
+
+                    packer.process(&mut entry)?;
+
+                    if let Some(entry) = entry.as_html_and_tar_entry() {
+                        push(tar::TarItem::Entry(entry));
+                    } else if let Some(external) = entry.as_html_and_tar_external() {
+                        push(tar::TarItem::External(external));
+                    } else {
+                        todo!()
+                    };
                 }
             }
 
@@ -146,30 +167,28 @@ fn merge_wasm(project: &Work) -> Result<(), Box<dyn std::error::Error>> {
 fn rebuild_wasm(project: &Work, file: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let source = std::fs::read_to_string(file)?;
     let mut source = dom::SourceDocument::new(&source);
-    let files = source.split_tar_contents()?;
+    let mut entries = source.split_tar_contents()?;
 
-    let files = files.iter().flat_map(|file| {
-        let wasi_document_dom::TarFile { header, content } = file;
-        let cstr = CStr::from_bytes_until_nul(&header.name).ok()?;
+    let packer = crate::webpack::Packer::from_root(&[]);
 
-        Some(html_and_tar::Entry {
-            // FIXME: proper handling. We may omit them but loudly. Note that we do not go through
-            // the `HtmlAttributeSafeName` constructor here. That may produce a broken output file
-            // if the input had a broken filename. Let's be lenient here but a strict mode could
-            // also sometimes be required.
-            name: HtmlAttributeSafeName(cstr.to_str().ok()?),
-            data: content,
-            attributes: file.attributes(),
-        })
+    for item in &mut entries {
+        packer.process(item)?;
+    }
+
+    let files = entries.iter().flat_map(|entry| {
+        if let Some(entry) = entry.as_html_and_tar_entry() {
+            Some(tar::TarItem::Entry(entry))
+        } else if let Some(external) = entry.as_html_and_tar_external() {
+            Some(tar::TarItem::External(external))
+        } else {
+            None
+        }
     });
 
     let wasm = tar::build(
         &mut source,
         move |push| {
-            for file in files {
-                push(tar::TarItem::Entry(file));
-            }
-
+            files.into_iter().for_each(push);
             Ok::<_, Box<dyn std::error::Error>>(())
         },
         None,

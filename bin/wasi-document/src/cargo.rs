@@ -13,6 +13,8 @@ pub struct BuildDir {
 }
 
 impl BuildDir {
+    /// Note: we always supply `Some` from `generate` but this interface does not enforce it. Idk.
+    /// May be worth exploring if you want to pipe through an environment flag.
     pub fn new(target_dir: Option<path::PathBuf>) -> Result<Self, Box<dyn error::Error>> {
         Ok(Self {
             dir: TempDir::new()?,
