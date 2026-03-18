@@ -47,7 +47,7 @@ async function fallback_shell(configuration, error) {
   console.log(error);
 }
 
-class Process {
+class KernelCallPromise {
   #promise;
   #reject;
   #resolve;
@@ -193,6 +193,7 @@ async function createSandbox({
         worker.postMessage({ 'completed': { ed: ed, result: result } });
         ed = undefined;
       } catch(e) {
+        console.log("Bad module", e);
         if (ed) {
           worker.postMessage({ 'completed': { ed: ed, error: ''+e } });
         }
@@ -200,7 +201,7 @@ async function createSandbox({
     },
 
     createFirmware: function(promise) {
-      worker_state.reaper_logging.insert(promise, 'firmware');
+      worker_state.reaper_logging.register(promise, 'firmware');
       worker_state.promises.push(promise);
     },
 
@@ -265,12 +266,26 @@ async function createSandbox({
       return reaper;
     },
 
+    fsRead(files) {
+      const fid = this.fid_counter;
+      this.fid_counter += 1;
+      let reaper = this._create_reaper(fid);
+
+      worker.postMessage({
+        'fs-read': {
+          files: files,
+          fid: fid,
+        },
+      });
+
+      return reaper;
+    },
+
     _create_reaper: function(fid) {
-      const result = new Process();
+      const result = new KernelCallPromise();
       result.fid = fid;
       this.reaper.set(fid, (result));
       this.reaper_logging.register(result, fid); 
-      // TODO: maybe we wrap this object? You must access `.promise` here.
       return result;
     },
 
@@ -282,7 +297,7 @@ async function createSandbox({
       let fallback = undefined;
 
       if (!this.reaper.has(id)) {
-        fallback = new Process();
+        fallback = new KernelCallPromise();
         this.reaper.set(id, (fallback));
         this.reaper_logging.register(fallback, id); 
       }
@@ -332,21 +347,14 @@ async function createSandbox({
     // Kernel telling us a root process ended.
     const { stdout, stderr, status, pid, fid } = data;
     const reaper = worker_state.reaper.get(fid);
+    worker_state.reaper.delete(fid);
 
     if (reaper == undefined) {
       console.warn(`Process ${pid} reaped with no reaper`, data);
       return;
     }
 
-    worker_state.reaper.delete(fid);
-    let pobj = reaper;
-
-    if (pobj == undefined) {
-      console.warn(`Process ${pid} reaped with no one waiting`, data);
-      return;
-    }
-
-    pobj?.resolve({ stdout, stderr, status, pid, fid });
+    reaper?.resolve({ stdout, stderr, status, pid, fid });
   });
 
   worker_state.commands.set("run-level", data => {
@@ -363,6 +371,18 @@ async function createSandbox({
     }
 
     console.log(`Kernel reached run level ${data}`);
+  });
+
+  worker_state.commands.set("fs-read", data => {
+    const { files, fid } = data;
+    const reaper = worker_state.reaper.get(fid);
+    worker_state.reaper.delete(fid);
+
+    if (reaper == undefined) {
+      return;
+    }
+
+    reaper?.resolve({ files });
   });
 
   worker_state.commands.set("element-select", data => {

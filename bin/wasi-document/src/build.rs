@@ -32,6 +32,23 @@ pub fn generate(
             assert!(status.success());
         }
 
+        for item in root {
+            const AUTO_DISCOVERY_EXCUSE: &str = "Using wasm-bindgen needs an explicit binary name. This is blocked on auto-discovery of install targets";
+
+            if let Some(bindgen) = &item.wasm_bindgen {
+                let bin = item.bin.as_deref();
+                let lib = item.lib.as_deref();
+
+                let bin = bin
+                    .or(lib)
+                    .ok_or_else(|| String::from(AUTO_DISCOVERY_EXCUSE))?;
+
+                let mut cmd = builder.wasm_bindgen(bin, bindgen);
+                let status = cmd.status()?;
+                assert!(status.success());
+            }
+        }
+
         root_fs.push(builder.path_while_alive().to_path_buf());
         resources.push(Box::new(builder) as Box<dyn std::any::Any>);
     }

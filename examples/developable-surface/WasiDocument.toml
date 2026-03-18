@@ -1,0 +1,18 @@
+[Document]
+index-html = "index.html"
+filesystem-root = "root"
+
+[[Document.Install]]
+git = "https://github.com/197g/developable-curve"
+package = "dc-plot"
+
+[[Document.Install]]
+path = "."
+package = "developable-surface"
+bin = "developable-surface"
+wasm-bindgen = "proc/display-obj/"
+target = "wasm32-unknown-unknown"
+
+[Machine]
+stage2 = { flavor = "node", workdir = "../../stage2-loader", build = "build.mjs" }
+stage3 = { flavor = "rust", package = "wasi-document-unzip", bin = "unzip" }

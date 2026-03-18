@@ -33,7 +33,7 @@ class RemoteEditPort {
   constructor(port, wasi, root_fs) {
     this.port = port;
     this.wasi = wasi;
-    this.root_fs = root_fs;
+    this.#root_fs = root_fs;
     this.#run_level = {};
 
     this.elementFree = []
@@ -43,6 +43,7 @@ class RemoteEditPort {
     this.commands = new Map();
     this.commands.set('completed', (ev) => this._handle_completed(ev));
     this.commands.set('create-proc', (ev) => this._handle_create_proc(ev));
+    this.commands.set('fs-read', (ev) => this._handle_fs_read(ev));
 
     this.port.onmessage = (ev) => this._handle_message(ev);
   }
@@ -195,6 +196,24 @@ class RemoteEditPort {
     })
   }
 
+  _handle_fs_read(read) {
+    const { files, fid } = read;
+
+    let buffers = [];
+    for (let file of files) {
+      let fd_obj = this.#root_fs?.path_open(0, ''+file, 0, 0)?.fd_obj;
+      buffers.push(fd_obj?.file?.data?.buffer);
+    }
+
+    this.port.postMessage({
+      'fs-read': {
+        files: buffers,
+        fid: fid,
+      },
+      transfer: buffers.filter(x => x),
+    })
+  }
+
   _reap(fid, status, wasi) {
     let transfer = [];
 
@@ -234,7 +253,7 @@ class RemoteEditPort {
       throw 'No binary specified';
     }
 
-    const exec_binary = this.root_fs
+    const exec_binary = this.#root_fs
       ?.path_open(0, ''+binary, 0, 0)
       ?.fd_obj;
 
@@ -246,7 +265,7 @@ class RemoteEditPort {
     fds[0] = this._open_io(stdin);
     fds[1] = this._open_io(stdout);
     fds[2] = this._open_io(stderr);
-    fds[3] = this.root_fs;
+    fds[3] = this.#root_fs;
 
     let blob = new Blob([exec_binary.file.data.buffer], { type: 'application/wasm' });
     let wasm = await WebAssembly.compileStreaming(new Response(blob));
@@ -290,7 +309,7 @@ class RemoteEditPort {
     }
 
     // Similar to Linux, all IO is open read-write internally :)
-    return this.root_fs?.path_open(0, path, 1, 1)?.fd_obj;
+    return this.#root_fs?.path_open(0, path, 1, 1)?.fd_obj;
   }
 }
 

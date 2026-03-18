@@ -12,7 +12,7 @@ members = [
   "stage3-kernel/proc",
 
   # Application for stage3/kernel
-  "examples/plotters-normal-2d",
+  "examples/plotters-normal-2d", "examples/developable-surface",
 ]
 
 exclude = [

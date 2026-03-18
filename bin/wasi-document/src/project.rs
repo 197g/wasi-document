@@ -152,12 +152,27 @@ pub struct Install {
     pub package: String,
     #[serde(default)]
     pub bin: Option<String>,
+    #[serde(default)]
+    pub lib: Option<String>,
     #[serde(default = "Install::r#true")]
     pub default_features: bool,
     #[serde(default)]
     pub features: Vec<String>,
     #[serde(flatten)]
     pub source: InstallSource,
+    #[serde(default)]
+    pub wasm_bindgen: Option<PathBuf>,
+    #[serde(default)]
+    pub target: RuntimeTarget,
+}
+
+#[derive(Default, Deserialize)]
+pub enum RuntimeTarget {
+    #[default]
+    #[serde(rename = "wasm32-wasip1")]
+    Wasm32Wasip1,
+    #[serde(rename = "wasm32-unknown-unknown")]
+    Wasm32UnknownUnknown,
 }
 
 impl Install {
