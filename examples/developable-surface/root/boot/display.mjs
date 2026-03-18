@@ -26,7 +26,6 @@ class RenderPacer {
   }
 
   _on_animationFrame(ts) {
-    console.log('Animation frame at ', ts);
     this.#next_frame.resolve({ value: ts });
     this.#next_frame = Promise.withResolvers();
 
@@ -78,10 +77,10 @@ async function main_loop(firmware) {
   let pacer = new RenderPacer();
   const renderer = js_module.create_renderer(pacer);
 
-  console.log('Render initialized', renderer);
+  console.log('Render initialized');
   pacer.pacer_launch();
 
-  const canvas_size = new ResizeObserver(ev => {
+  const canvas_size = new ResizeObserver(entries => {
     for (const entry of entries) {
       const { blockSize, inlineSize } = entry.contentBoxSize[0];
       renderer.set_size(blockSize, inlineSize);
@@ -93,8 +92,18 @@ async function main_loop(firmware) {
 
   canvas_size.observe(canvas);
 
-  let endless = Promise.withResolvers().promise;
+  const { files: [svg, obj] } = (
+    await firmware.fsRead([
+      'template-neat.svg',
+      'template-neat.obj',
+    ]).promise()
+  );
 
+  let l = new TextDecoder();
+  const obj_text = l.decode(obj);
+  renderer.set_obj(obj_text);
+
+  let endless = Promise.withResolvers().promise;
   // Do not return.
   await endless;
 }

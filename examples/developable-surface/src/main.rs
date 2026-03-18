@@ -92,10 +92,13 @@ pub struct RenderHandle {
 
 #[wasm_bindgen]
 impl RenderHandle {
+    #[wasm_bindgen]
     pub fn set_size(&self, x: f32, y: f32) {
+        log::warn!("Changing canvas size: {x}×{y}");
         let _ = self.sender.send(Command::Resize(x, y));
     }
 
+    #[wasm_bindgen]
     pub fn set_obj(&self, obj: &str) -> Result<(), wasm_bindgen::JsValue> {
         let mut cursor = std::io::Cursor::new(obj);
         let obj = tobj::load_obj_buf(&mut cursor, &tobj::GPU_LOAD_OPTIONS, |_| {
@@ -107,7 +110,7 @@ impl RenderHandle {
             Err(err) => Err(format!("Bad OBJ {err:?}"))?,
         };
 
-        let _ = self.sender.send(Command::Model(models));
+        self.sender.send(Command::Model(models)).unwrap();
         Ok(())
     }
 }
@@ -148,17 +151,23 @@ impl GlobalState {
                     Ok(())
                 }
             };
+
+            if let Err(e) = result {
+                log::warn!("Ignored command as a result of {e:?}");
+            }
         }
     }
 
     fn set_meshes(&self, models: &[tobj::Model]) -> Result<(), wasm_bindgen::JsValue> {
         let mut meshes = vec![];
+        let tris: usize = models.iter().map(|m| m.mesh.indices.len() / 3).sum();
 
         for model in models {
             let mesh = mk_mesh(&self.ctx, &model)?;
             meshes.push(mesh);
         }
 
+        log::warn!("Assigning {} meshes, {tris} triangles", meshes.len());
         *self.mesh.borrow_mut() = meshes;
         Ok(())
     }
@@ -193,9 +202,13 @@ impl RenderState {
         let mut meshes = self.mesh.borrow_mut();
         let mut displayfb = gl::texture::EmptyFramebuffer::new(&self.ctx, self.viewport);
 
+        let blues = [("blue", gl::UniformData::Scalar(1.0))]
+            .into_iter()
+            .collect();
+
         pipeline.shade(
             &self.program,
-            std::collections::HashMap::new(),
+            blues,
             meshes.iter_mut().collect(),
             &mut displayfb,
         )?;
@@ -207,7 +220,7 @@ impl RenderState {
 const VERTEX_SHADER_SOURCE: &str = r#"  #version 100
 attribute vec3 in_position;
 void main() {
-  gl_Position = vec4(in_position, 1.0);
+  gl_Position = vec4(in_position, 4.0);
 }
 "#;
 
