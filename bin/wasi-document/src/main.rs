@@ -28,6 +28,9 @@ enum Args {
 
         #[arg(long)]
         target_dir: Option<PathBuf>,
+
+        #[arg(long)]
+        offline: bool,
     },
     /// Repack a tar structure from an HTML document that was modified as a DOM.
     Repack {

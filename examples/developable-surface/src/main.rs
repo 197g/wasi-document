@@ -37,15 +37,15 @@ pub fn _create_renderer(
 
     let canvas = gl::util::get_canvas("canvas-name")
         .ok_or_else(|| "no such canvas `canvas-name`".to_string())?;
-    log::warn!("Canvas found");
+    log::info!("Canvas found");
 
     let ctx: web_sys::WebGlRenderingContext = gl::util::get_ctx_from_canvas(&canvas, "webgl")?;
-    log::warn!("Rendering context found");
+    log::info!("Rendering context found");
 
     let ctx = glsmrs::Ctx::new(ctx)?;
-    log::warn!("Context created");
+    log::info!("Context created");
     let program = gl::Program::new(&ctx, VERTEX_SHADER_SOURCE, FRAGMENT_SHADER_SOURCE)?;
-    log::warn!("Program created");
+    log::info!("Program created");
 
     let state = GlobalState {
         ctx,
@@ -69,7 +69,7 @@ pub fn _create_renderer(
             };
 
             state.receive_all(&mut receiver);
-            log::info!("Rendering frame");
+            log::trace!("Rendering frame");
 
             let co = RenderState::checkout(&state);
             match co.render() {
@@ -94,7 +94,7 @@ pub struct RenderHandle {
 impl RenderHandle {
     #[wasm_bindgen]
     pub fn set_size(&self, x: f32, y: f32) {
-        log::warn!("Changing canvas size: {x}×{y}");
+        log::info!("Changing canvas size: {x}×{y}");
         let _ = self.sender.send(Command::Resize(x, y));
     }
 
@@ -167,7 +167,7 @@ impl GlobalState {
             meshes.push(mesh);
         }
 
-        log::warn!("Assigning {} meshes, {tris} triangles", meshes.len());
+        log::info!("Assigning {} meshes, {tris} triangles", meshes.len());
         *self.mesh.borrow_mut() = meshes;
         Ok(())
     }
@@ -205,6 +205,9 @@ impl RenderState {
         let blues = [("blue", gl::UniformData::Scalar(1.0))]
             .into_iter()
             .collect();
+
+        self.ctx.clear_color(0.0, 0.0, 0.0, 0.0);
+        self.ctx.clear(gl::GL::COLOR_BUFFER_BIT);
 
         pipeline.shade(
             &self.program,

@@ -20,7 +20,8 @@ pub fn generate(
 
     if let Some(root) = &configuration.document.install {
         let target_dir = build.target_dir_for_wasm32_wasi().to_owned();
-        let builder = crate::cargo::BuildDir::new(Some(target_dir))?;
+        let mut builder = crate::cargo::BuildDir::new(Some(target_dir))?;
+        builder.set_offline(build.offline);
 
         let commands = root
             .iter()
@@ -107,12 +108,18 @@ fn run_build(build: &Build) -> Result<BuiltResource, Box<dyn std::error::Error>>
 pub struct BuildEnv {
     pub(crate) cargo_workspace: CargoMetadata,
     pub(crate) cargo_target_override: Option<path::PathBuf>,
+    pub(crate) offline: bool,
 }
 
 impl BuildEnv {
     pub fn new(args: &super::Args) -> Result<Self, Box<dyn std::error::Error>> {
         let project = match args {
             super::Args::Build { project, .. } | super::Args::Repack { project, .. } => project,
+        };
+
+        let offline = match args {
+            super::Args::Build { offline, .. } => *offline,
+            super::Args::Repack { .. } => true,
         };
 
         let path = match project {
@@ -128,6 +135,7 @@ impl BuildEnv {
         Ok(Self {
             cargo_workspace: metadata(&path)?,
             cargo_target_override,
+            offline,
         })
     }
 

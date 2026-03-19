@@ -11,6 +11,7 @@ pub struct BuildDir {
     dir: TempDir,
     wasm_bindgen_origin_dir: TempDir,
     target_dir: Option<path::PathBuf>,
+    offline: bool,
 }
 
 impl BuildDir {
@@ -21,7 +22,12 @@ impl BuildDir {
             dir: TempDir::new()?,
             wasm_bindgen_origin_dir: TempDir::new()?,
             target_dir,
+            offline: false,
         })
+    }
+
+    pub fn set_offline(&mut self, offline: bool) {
+        self.offline = offline;
     }
 
     pub fn command(&self, install: &Install) -> process::Command {
@@ -48,6 +54,10 @@ impl BuildDir {
         } else {
             self.wasm_bindgen_origin_dir.path()
         });
+
+        if self.offline {
+            cmd.arg("--offline");
+        }
 
         match &install.source {
             InstallSource::Git { git, rev } => {

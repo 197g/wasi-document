@@ -192,8 +192,12 @@ class RemoteEditPort {
     let binary = executable || args[0];
     this._dispatch({ binary, stdin, stdout, stderr, env, args }).then((settled) => {
       console.log('Process settled', fid);
-      this._reap(fid, 0, settled.configuration);
-    })
+      let wasi = settled.configuration;
+      this._reap(fid, wasi.status || -1, wasi);
+    }).catch(() => {
+      console.log('Process settled harshly', fid);
+      this._reap(fid, -1, { fds: [] });
+    });
   }
 
   _handle_fs_read(read) {
@@ -266,11 +270,13 @@ class RemoteEditPort {
     fds[1] = this._open_io(stdout);
     fds[2] = this._open_io(stderr);
     fds[3] = this.#root_fs;
+    // FIXME: this should be created sync in _handle_create_proc. That way we
+    // can communicate the finalized configuration in all cases even on error.
+    let newWasi = new this.wasi(args, [], fds);
 
     let blob = new Blob([exec_binary.file.data.buffer], { type: 'application/wasm' });
     let wasm = await WebAssembly.compileStreaming(new Response(blob));
 
-    let newWasi = new this.wasi(args, [], fds);
     var wasi_imports = { 'wasi_snapshot_preview1': newWasi.wasiImport };
     const instance = await WebAssembly.instantiate(wasm, wasi_imports);
 	  console.log('Starting process ', newWasi);
@@ -279,8 +285,12 @@ class RemoteEditPort {
     try {
       await newWasi.start({ 'exports': instance.exports });
     } catch (e) {
-      if (typeof(e) == 'string' && e == 'exit with exit code 0') {} else {
-        status = -1;
+      if (typeof(e) == 'string' && e == 'exit with exit code 0') {
+        newWasi.status = 0;
+      } else if (typeof(e) == 'string') {
+        newWasi.status = parseInt(e.match(/code (\d+)/)?.[1]);
+      } else {
+        newWasi.status = -1;
         throw e;
       }
     }
@@ -309,7 +319,12 @@ class RemoteEditPort {
     }
 
     // Similar to Linux, all IO is open read-write internally :)
-    return this.#root_fs?.path_open(0, path, 1, 1)?.fd_obj;
+    let fd_obj = this.#root_fs?.path_open(0, path, 1, 1)?.fd_obj;
+    if (fd_obj && io.pipe) {
+      fd_obj.file.data = new Uint8Array(io.pipe);
+    }
+
+    return fd_obj;
   }
 }
 

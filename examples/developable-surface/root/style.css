@@ -1,0 +1,82 @@
+/* Style sheet, we load this from the WASI fs for no good reason but to show that off.
+ *
+ * A fun mechanism that the browser could offer would be something like
+ * 'pre-loaded-object-URLs'. That is, an object URL chosen by us so that this
+ * constant can be used in a `<link href>` in the header, which we link to
+ * content _dynamically_ by _later_ creating a corresponding object URL. (For
+ * instance, `createObjectURL` could take a second parameter)—with that fetch
+ * sitting in a preload / waiting state until it is fulfilled. It's not
+ * entirely clear how to do that safely. I suppose the link would have to be
+ * relative so that the browser can still randomize some portion of it..?
+ **/
+body {
+  display: grid;
+  height: 100vh;
+  width: 100vw;
+  column-gap: 2em;
+}
+
+body > #header {
+  grid-area: head;
+}
+
+body > #canvas-name {
+  grid-area: vis;
+}
+
+body > #show-svg {
+  grid-area: svg;
+}
+
+body > #ctrl {
+  grid-area: ctrl;
+}
+
+#canvas-name {
+  width: 100%;
+  aspect-ratio: 1;
+}
+
+.parameter-list {
+  display: grid;
+  grid: auto row;
+  grid-template-columns: 10em 1fr;
+}
+
+.parameter-list > input[type="number"] {
+  grid-column: 1;
+}
+
+.parameter-list > input[type="range"] {
+  grid-column: 2;
+}
+
+.parameter-list .pure-semantic-fieldset {
+  /* This one is just for HTML grouping */
+  display: grid;
+  grid-template-columns: subgrid;
+  grid-column: 1 / span 2;
+  padding: 0;
+  margin: 0;
+  border: unset;
+}
+
+@media(min-width: 960px) {
+  body {
+    grid-template:
+      [header-left] "head head head" 3rem [header-right]
+      [main-left] "vis svg ctrl" 1fr [main-right]
+      / 1fr 1fr 1fr;
+  }
+}
+
+@media(max-width: 960px) {
+  body {
+    grid-template:
+      [header-left] "head" 3rem [header-right]
+      "ctrl" 1fr
+      "vis" 1fr
+      "svg" 1fr
+      / 1fr;
+  }
+}

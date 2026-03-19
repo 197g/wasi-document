@@ -229,7 +229,7 @@ async function createSandbox({
         throw { error: { unknown_io_binding: obj } };
       }
 
-      function mk_input(obj) {
+      function mk_input(obj, transfer) {
         if (obj == undefined) {
           return { null: true };
         }
@@ -241,6 +241,15 @@ async function createSandbox({
         if (obj.file) {
           const { file } = obj;
           return { file: ''+file };
+        } else if (obj.pipe) {
+          const { pipe } = obj;
+
+          if (!(pipe instanceof ArrayBuffer)) {
+            throw 'Pipe must be an array buffer of given input';
+          }
+
+          transfer.push(pipe);
+          return { pipe: pipe };
         } else if (obj.null) {
           return { null: true };
         }
@@ -252,9 +261,10 @@ async function createSandbox({
       this.fid_counter += 1;
       let reaper = this._create_reaper(fid);
 
+      let transfer = [];
       worker.postMessage({
         'create-proc': {
-          stdin: mk_input(stdin),
+          stdin: mk_input(stdin, transfer),
           stdout: mk_output(stdout),
           stderr: mk_output(stderr),
           env: env?.map(e => ''+e),

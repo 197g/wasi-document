@@ -1,6 +1,24 @@
 <html>
-<head></head>
+  <head></head>
 <body>
-	<canvas id=canvas-name name=canvas-name width=200 height=200 style="width: 50%; height: 50%"></canvas>
+  <aside id=header></aside>
+  <canvas id=canvas-name name=canvas-name width=200 height=200></canvas>
+  <div id=show-svg ></div>
+  <form id=ctrl method=dialog>
+    <fieldset class=parameter-list>
+      <input id=enter-loc type=number disabled value=0 step=0.01></input>
+      <input id=enter-p type=range list=tan-list min=-85 max=85></input>
+      <fieldset id=free-parameter-list class=pure-semantic-fieldset>
+      </fieldset>
+      <input type=number disabled value=0></input>
+      <input id=exit-p type=range list=tan-list min=-85 max=85></input>
+    </fieldset>
+    <button id=ctrl-submit>Submit</button>
+    <datalist id=tan-list>
+      <option value=-85></option>
+      <option value=0></option>
+      <option value=85></option>
+    </datalist>
+  </form>
 </body>
 </html>
