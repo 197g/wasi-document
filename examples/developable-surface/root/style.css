@@ -61,6 +61,10 @@ body > #ctrl {
   border: unset;
 }
 
+#download ~ button {
+  display: none;
+}
+
 @media(min-width: 960px) {
   body {
     grid-template:

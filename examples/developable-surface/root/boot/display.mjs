@@ -26,7 +26,8 @@ class RenderPacer {
   }
 
   _on_animationFrame(ts) {
-    this.#next_frame.resolve({ value: ts });
+    // The Stream abstraction used with bindgen works on JsValue.
+    this.#next_frame.resolve({ value: new Number(ts) });
     this.#next_frame = Promise.withResolvers();
 
     requestAnimationFrame((ts) => {
@@ -117,6 +118,9 @@ function link_stylesheet(style) {
   document.head.appendChild(link);
 }
 
+function fill_parameters(input_number, input_enter, free_parameters, parameters) {
+}
+
 function install_controls(control_data) {
   const form = document.getElementById('ctrl');
   const { stream } = control_data;
@@ -127,6 +131,8 @@ function install_controls(control_data) {
 
   const enter_parameter = document.getElementById('enter-p');
   const exit_parameter = document.getElementById('exit-p');
+
+  const btn_download = document.getElementById('download');
 
   const extras = [
     { loc: 0.5, h: 0.2 },
@@ -149,8 +155,7 @@ function install_controls(control_data) {
   }
 
   const angle_to_rad = (angle) => angle / 180 * 3.14159265;
-
-  form.onsubmit = (ev) => {
+  const submit_parameter = () => {
     let free_locs = free_parameters.querySelectorAll(':scope input[type=number]');
     let free_vals = free_parameters.querySelectorAll(':scope input[type=range]');
 
@@ -167,7 +172,7 @@ function install_controls(control_data) {
     parameters.push({ 'loc': 2.99, h: angle_to_rad(exit_parameter.value) });
     console.log(parameters);
 
-    stream.push({
+    const complex = {
       'hermite': [
         {
           position: [0.0, 0.0, 0.0],
@@ -187,8 +192,66 @@ function install_controls(control_data) {
         }
       ],
       'normal': [ 0.0, -0.3, 1.0 ],
+    };
+
+    const simpler = {
+      'hermite': [
+        {
+          position: [1.0, 0.0, 0.0],
+          tangent: [0.0, 1.0, 0.0],
+        },
+        {
+          position: [0.0, 1.0, 0.0],
+          tangent: [-1.0, 0.0, 0.0],
+        },
+        {
+          position: [-1.0, 0.0, 0.0],
+          tangent: [0.0, -1.0, 0.0],
+        },
+        {
+          position: [0.0, -1.0, 0.0],
+          tangent: [1.0, 0.0, 0.0],
+        },
+        {
+          position: [1.0, 0.0, 0.0],
+          tangent: [0.0, 1.0, 0.0],
+        },
+      ],
+      'normal': [0.99, 0.0, 0.1],
+    };
+
+    stream.push({
+      ...simpler,
       'parameter': parameters,
     });
+  }
+
+  form.onsubmit = submit_parameter;
+
+  enter_parameter.onchange = submit_parameter;
+  exit_parameter.onchange = submit_parameter;
+
+  for (const inp of free_parameters.querySelectorAll(':scope input[type=range]')) {
+    inp.onchange = submit_parameter;
+  }
+
+  btn_download.onclick = (ev) => {
+    const { obj, svg } = control_data.data;
+    const url_obj = URL.createObjectURL(new Blob([obj], { 'content-type': 'text/ascii' }));
+    const url_svg = URL.createObjectURL(new Blob([svg], { 'content-type': 'image/svg+xml' }));
+
+    const link = document.createElement('a');
+    link.href = url_obj;
+    link.download = 'example.obj';
+
+    btn_download.after(link);
+    link.click();
+
+    link.href = url_svg;
+    link.download = 'example.svg';
+
+    link.click();
+    btn_download.parent.removeChild(link);
   };
 }
 
@@ -213,10 +276,14 @@ async function install_worker(control_data, firmware) {
     const json_str = d.decode(stdout);
     console.info(stdout, json_str);
     console.info(stderr, d.decode(stderr));
-    const { obj, svg } = JSON.parse(json_str);
 
-    renderer.set_obj(obj);
-    show_svg.innerHTML = svg;
+    try {
+      const { obj, svg } = JSON.parse(json_str);
+
+      renderer.set_obj(obj);
+      show_svg.innerHTML = svg;
+      control_data.data = { obj, svg };
+    } catch (e) {}
   }
 }
 
@@ -273,10 +340,14 @@ async function main_loop(firmware) {
   renderer.set_obj(obj_text);
 
   l = new TextDecoder();
-  document.getElementById('show-svg').innerHTML = l.decode(svg);
+  const svg_text = l.decode(svg);
+  document.getElementById('show-svg').innerHTML = svg_text;
 
-  const control_data = { renderer: renderer };
-  control_data.stream = new StateSourceStream();
+  const control_data = {
+    renderer: renderer,
+    stream: new StateSourceStream(),
+    data: { obj: obj_text, svg: svg_text },
+  };
 
   install_worker(control_data, firmware);
   install_controls(control_data);
