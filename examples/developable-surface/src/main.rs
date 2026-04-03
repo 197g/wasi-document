@@ -52,8 +52,9 @@ pub fn _create_renderer(
         ctx,
         program: Rc::new(program),
         mesh: Default::default(),
-        size: Cell::new((200., 200.)),
+        canvas_size: Cell::new((200., 200.)),
         camera: Cell::new([0., 0., 0., 1.]),
+        modelscale: Cell::new(220.0),
         dragged_point: Cell::new(None),
         auto_rotate: Cell::new({
             let angle = 0.25;
@@ -165,12 +166,21 @@ impl RenderHandle {
             .map_err(|e| format!("No longer in control: {e}"))?;
         Ok(())
     }
+
+    #[wasm_bindgen]
+    pub fn modelscale(&self, modelsize: f32) -> Result<(), wasm_bindgen::JsValue> {
+        self.sender
+            .send(Command::Modelscale(modelsize))
+            .map_err(|e| format!("No longer in control: {e}"))?;
+        Ok(())
+    }
 }
 
 /// Commands are always executed in the context of the main renderer. At least, scheduled there.
 enum Command {
     Autopanning { speed: Option<f32>, axis: [f32; 3] },
     Model(Vec<tobj::Model>),
+    Modelscale(f32),
     Resize(f32, f32),
     DragRotation { right: f32, down: f32 },
     DragRelease,
@@ -189,13 +199,14 @@ fn mk_mesh(ctx: &gl::Ctx, model: &tobj::Model) -> Result<gl::mesh::Mesh, wasm_bi
 
 struct GlobalState {
     ctx: glsmrs::Ctx,
-    size: Cell<(f32, f32)>,
+    canvas_size: Cell<(f32, f32)>,
 
     /// We only have one program. NIT: the type should be Clone, it is two Rc's in disguise. Alas.
     program: Rc<gl::Program>,
     /// The meshes to draw.
     mesh: Rc<RefCell<Vec<gl::mesh::Mesh>>>,
     camera: Cell<[f32; 4]>,
+    modelscale: Cell<f32>,
 
     /// Interaction (host-side state)
     dragged_point: Cell<Option<(f32, f32)>>,
@@ -219,8 +230,12 @@ impl GlobalState {
                     Ok(())
                 }
                 Command::Model(tobj) => self.set_meshes(&tobj),
+                Command::Modelscale(scale) => {
+                    self.modelscale.set(scale);
+                    Ok(())
+                }
                 Command::Resize(x, y) => {
-                    self.size.set((x, y));
+                    self.canvas_size.set((x, y));
                     Ok(())
                 }
                 Command::DragRotation { right, down } => {
@@ -331,6 +346,8 @@ struct RenderState {
     viewport: gl::texture::Viewport,
     /// Quaternion describing the view.
     view: [f32; 4],
+    /// How big is the model (in coords)? Inverse viewbox scaling.
+    modelscale: f32,
 }
 
 impl RenderState {
@@ -340,10 +357,11 @@ impl RenderState {
             program: state.program.clone(),
             mesh: state.mesh.clone(),
             viewport: {
-                let (x, y) = state.size.get();
+                let (x, y) = state.canvas_size.get();
                 gl::texture::Viewport::new(x as u32, y as u32)
             },
             view: state.camera.get(),
+            modelscale: state.modelscale.get(),
         }
     }
 
@@ -356,8 +374,12 @@ impl RenderState {
         let [w, x, y, z] = self.view;
         let color = gl::UniformData::Scalar(1.0);
         let view = gl::UniformData::Vector4([x, y, z, w]);
+        // GL has [-1, 1], `scale` is meant as edge-to-edge
+        let scale = gl::UniformData::Scalar(self.modelscale / 2.0);
 
-        let blues = [("blue", color), ("camera", view)].into_iter().collect();
+        let blues = [("blue", color), ("camera", view), ("scale", scale)]
+            .into_iter()
+            .collect();
 
         self.ctx.disable(gl::GL::CULL_FACE);
         self.ctx.clear_color(0.0, 0.0, 0.0, 0.0);
@@ -377,10 +399,11 @@ impl RenderState {
 const VERTEX_SHADER_SOURCE: &str = r#"#version 100
 attribute vec3 in_position;
 uniform vec4 camera;
+uniform float scale;
 
 void main() {
   vec3 temp = camera.w * in_position + cross(camera.xyz, in_position);
-  gl_Position = vec4(in_position + 2.0 * cross(camera.xyz, temp), 110.0);
+  gl_Position = vec4(in_position + 2.0 * cross(camera.xyz, temp), scale);
 }
 "#;
 

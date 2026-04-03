@@ -253,6 +253,11 @@ function install_controls(control_data) {
     link.click();
     btn_download.parent.removeChild(link);
   };
+
+  // Next microtick, i.e. after the above dom changes have propagated, for consistency.
+  (async function() {
+    submit_parameter()
+  })();
 }
 
 async function install_worker(control_data, firmware) {
