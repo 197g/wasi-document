@@ -70,7 +70,7 @@ body > #ctrl {
     grid-template:
       [header-left] "head head head" 3rem [header-right]
       [main-left] "vis svg ctrl" 1fr [main-right]
-      / 1fr 1fr 1fr;
+      / minmax(25vw, 1fr) minmax(25vw, 1fr) minmax(15vw, 1fr);
   }
 }
 
@@ -83,4 +83,47 @@ body > #ctrl {
       "svg" 1fr
       / 1fr;
   }
+}
+
+.overlay-toggle {
+  display: none;
+}
+
+.overlay-toggle~.overlay {
+  display: none;
+}
+
+.overlay {
+  display: grid;
+  border: solid black 2px;
+  padding: 2em;
+  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-rows: 1fr 2em;
+}
+
+.overlay-toggle:checked ~.overlay {
+  display: grid;
+  position: fixed;
+  min-width: 70vw;
+  min-height: 70vh;
+  left: 15vw;
+  top: 15vh;
+  z-index: 1;
+  background: white;
+}
+
+.overlay input[type=textarea] {
+  grid-column: 1/4;
+}
+
+.overlay label {
+  position: absolute;
+  top: 0.5em;
+  right: 0.5em;
+  background: white;
+}
+
+#show-svg svg {
+  max-width: 100%;
+  max-height: 90vh;
 }

@@ -403,7 +403,8 @@ uniform float scale;
 
 void main() {
   vec3 temp = camera.w * in_position + cross(camera.xyz, in_position);
-  gl_Position = vec4(in_position + 2.0 * cross(camera.xyz, temp), scale);
+  vec4 pos = vec4(in_position + 2.0 * cross(camera.xyz, temp), scale);
+  gl_Position = vec4(pos.x, pos.y, -pos.z, pos.w);
 }
 "#;
 
@@ -411,7 +412,7 @@ const FRAGMENT_SHADER_SOURCE: &str = r#"#version 100
 precision mediump float;
 uniform float blue;
 void main() {
-  gl_FragColor = vec4(0.0, 0.0, blue, 1.0);
+  gl_FragColor = vec4(0.0, 0.0, blue, 1.0 - gl_FragCoord.z);
 }
 "#;
 

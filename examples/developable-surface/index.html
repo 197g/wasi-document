@@ -13,13 +13,24 @@
       <input type=number disabled value=0></input>
       <input id=exit-p type=range list=tan-list min=-85 max=85></input>
     </fieldset>
-    <button id=ctrl-submit>Submit</button>
     <datalist id=tan-list>
       <option value=-85></option>
       <option value=0></option>
       <option value=85></option>
     </datalist>
     <button id=download>Download</button>
+    <label for=overlay-toggle>Data Input</label>
   </form>
+
+  <input class=overlay-toggle id=overlay-toggle name=overlay-toggle type=checkbox></input>
+  <aside class=overlay>
+    <label for=overlay-toggle>X</label>
+    <input type=textarea></input>
+    <button id=btn_store>Use text</button>
+    <button id=btn_load>Set text from model</button>
+
+    <!-- This should be a fallback only -->
+    <button id=ctrl-submit>Submit</button>
+  </aside>
 </body>
 </html>

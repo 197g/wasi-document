@@ -118,9 +118,6 @@ function link_stylesheet(style) {
   document.head.appendChild(link);
 }
 
-function fill_parameters(input_number, input_enter, free_parameters, parameters) {
-}
-
 function install_controls(control_data) {
   const form = document.getElementById('ctrl');
   const { stream } = control_data;
@@ -133,11 +130,14 @@ function install_controls(control_data) {
   const exit_parameter = document.getElementById('exit-p');
 
   const btn_download = document.getElementById('download');
+  const btn_store = document.getElementById('store');
+  const btn_load = document.getElementById('load');
 
   const extras = [
     { loc: 0.5, h: 0.2 },
     { loc: 1.5, h: 0.0 },
     { loc: 2.5, h: -0.16 },
+    { loc: 3.5, h: 0.0 },
   ];
   
   for (const { loc, h } of extras) {
@@ -155,6 +155,13 @@ function install_controls(control_data) {
   }
 
   const angle_to_rad = (angle) => angle / 180 * 3.14159265;
+
+  const load_parameter = () => {
+  };
+
+  const store_parameter = () => {
+  };
+
   const submit_parameter = () => {
     let free_locs = free_parameters.querySelectorAll(':scope input[type=number]');
     let free_vals = free_parameters.querySelectorAll(':scope input[type=range]');
@@ -169,7 +176,8 @@ function install_controls(control_data) {
     
     parameters.sort((lhs, rhs) => lhs.loc - rhs.loc);
     parameters.unshift({ 'loc': 0, h: angle_to_rad(enter_parameter.value) });
-    parameters.push({ 'loc': 2.99, h: angle_to_rad(exit_parameter.value) });
+    parameters.push({ 'loc': 3.99, h: angle_to_rad(exit_parameter.value) });
+
     console.log(parameters);
 
     const complex = {
@@ -220,9 +228,56 @@ function install_controls(control_data) {
       'normal': [0.99, 0.0, 0.1],
     };
 
+    const spiral = {
+      'hermite': [],
+      'nodes': [
+        {'hermite': [
+          {
+            position: [1.0, 0.0, 0.0],
+            tangent: [0.0, 1.0, 0.0],
+          },
+          {
+            position: [0.0, 1.0, 0.0],
+            tangent: [-1.0, 0.0, 0.0],
+          },
+          {
+            position: [-1.0, 0.0, 0.0],
+            tangent: [0.0, -1.0, 0.0],
+          },
+          {
+            position: [0.0, -1.0, 0.0],
+            tangent: [1.0, 0.0, 0.0],
+          },
+          {
+            position: [1.0, 0.0, 0.0],
+            tangent: [0.0, 1.0, 0.0],
+          },
+        ]},
+        {'spiral': {
+          radius: 2.0,
+          pitch: 3.0,
+        }},
+        {'hermite': [
+          {
+            position: [1.0, 0.0, 0.0],
+            tangent: [0.0, 1.0, 0.0],
+          },
+          {
+            position: [0.0, 1.0, 0.0],
+            tangent: [-1.0, 0.0, 0.0],
+          },
+          {
+            position: [-1.0, 0.0, 0.0],
+            tangent: [0.0, -1.0, 0.0],
+          },
+        ]},
+      ],
+      'normal': [1.0, 0.0, 0.0],
+    };
+
     stream.push({
-      ...simpler,
-      'parameter': parameters,
+      parameter: parameters,
+      ... spiral,
     });
   }
 
