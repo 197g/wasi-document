@@ -192,7 +192,10 @@ pub enum InstallSource {
     Path {
         path: PathBuf,
     },
-    CratesIo,
+    CratesIo {
+        #[serde(rename = "name")]
+        name: String,
+    },
 }
 
 #[derive(Debug)]

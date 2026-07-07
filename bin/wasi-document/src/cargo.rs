@@ -70,7 +70,9 @@ impl BuildDir {
                 cmd.arg("--path");
                 cmd.arg(path);
             }
-            InstallSource::CratesIo => {}
+            InstallSource::CratesIo { name } => {
+                cmd.arg(name);
+            }
         }
 
         cmd.arg(&install.package);

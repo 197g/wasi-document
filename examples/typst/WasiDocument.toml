@@ -1,7 +1,10 @@
 [Document]
 index-html = "index.html"
-init = "bin/typst.wasm"
-root = "root"
+filesystem-root = "root"
+
+[[Document.Install]]
+path = "./typst/crates/typst-cli"
+package = "typst-cli"
 
 [Machine]
 stage2 = { flavor = "node", workdir = "../../stage2-loader", build = "build.mjs" }
