@@ -409,9 +409,9 @@ export default async function(configuration) {
   assign_arguments("proc/0/environ", (e) => configuration.env.push(e), "environ");
 
   let bootdir = undefined;
-  if (bootdir = root_fs?.dir.get_entry_for_path("boot")) {
+  if (bootdir = root_fs?.dir.path_open().fd_obj.path_lookup("boot").inode_obj) {
     console.log('Found boot directory', bootdir);
-    for (let [name, entry] of Object.entries(bootdir?.contents || [])) {
+    for (let [name, entry] of bootdir?.contents.entries()) {
       console.log(name, entry);
       if (!name.match(/\.mjs$/)) {
         continue;

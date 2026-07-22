@@ -7,11 +7,11 @@ async function loadInterpretedData(loader_data) {
   let stdin = new File(loader_data);
   let stdout = new File([]);
   let stderr = new File([]);
-  let stddir = new PreopenDirectory(".", {
+  let stddir = new PreopenDirectory(".", Object.entries({
       "stdin": stdin,
       "stdout": stdout,
       "stderr": stderr,
-  });
+  }));
 
   let fds = [
     stddir.path_open(0, "stdin", 0).fd_obj,

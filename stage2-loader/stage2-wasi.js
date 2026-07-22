@@ -1,4 +1,4 @@
-import { WASI, File, OpenFile, Directory, PreopenDirectory } from "@bjorn3/browser_wasi_shim";
+import { WASI, Inode, File, OpenFile, Directory, PreopenDirectory } from "@bjorn3/browser_wasi_shim";
 // This include is synthesized by `build.js:wasiInterpreterPlugin`.
 import { load_config } from 'wasi-config:config.toml'
 
@@ -816,12 +816,12 @@ async function worker_mount({
       /* 9: Directory */
       (what) => {
         instr_debugging('directory', ops[what]);
-        return new Directory(ops[what]);
+        return new Directory(Object.entries(ops[what]));
       },
       /* 10: PreopenDirectory */
       (where, what) => {
         instr_debugging('preopen directory', ops[where], ops[what]);
-        return new PreopenDirectory(ops[where], ops[what]);
+        return new PreopenDirectory(ops[where], Object.entries(ops[what]));
       },
       /* 11: Directory.open */
       (dir, im_flags, path, im_oflags) => {
@@ -876,6 +876,12 @@ async function worker_mount({
   let fds = configuration.fds;
   let filesystem = configuration.fds[3];
   configuration.WASI = WASI;
+  configuration.shim = {
+    Directory: Directory,
+    Inode: Inode,
+    File: File,
+    PreopenDirectory: PreopenDirectory,
+  };
 
   if (wasi_root_fs) {
     let wasi_root_files = new Map(wasi_root_fs.map(item => [item.header.name, item.data]));
