@@ -1,15 +1,16 @@
-import { WASI, Inode, File, OpenFile, Directory, PreopenDirectory } from "@bjorn3/browser_wasi_shim";
+import { WASI, Inode, File, OpenFile, Directory, PreopenDirectory, WASIProcExit } from "@bjorn3/browser_wasi_shim";
 // This include is synthesized by `build.js:wasiInterpreterPlugin`.
 import { load_config } from 'wasi-config:config.toml'
 
 async function fallback_shell(configuration, error) {
-  document.documentElement.innerHTML = `<p>Missing boot exec</p>`;
+  let shell = document.createElement('div');
+  shell.innerHTML = `<p>Missing boot exec</p>`;
 
   if (error !== undefined) {
-    document.documentElement.innerHTML = `<p>Error: ${error}</p>`;
+    shell.innerHTML = `<p>Error: ${error}</p>`;
   }
 
-  document.documentElement.innerHTML += `<p>WAH rescue shell</p>`;
+  shell.innerHTML += `<p>WAH rescue shell</p>`;
   // FIXME: here we would search for a special section, that can _optionally_
   // added if the file size is not too consequential. This would then contain
   // an actual shell compiled as a separate single-module ESM, a new stage2/SPA
@@ -40,11 +41,12 @@ async function fallback_shell(configuration, error) {
   };
 
   if (rootfs) {
-    document.documentElement.innerHTML += `<p>Filesystem: </p>`;
-    document.documentElement.appendChild(mkDirElement(rootfs.dir));
+    shell.innerHTML += `<p>Filesystem: </p>`;
+    shell.appendChild(mkDirElement(rootfs.dir));
   }
 
   console.log(error);
+  document.firstElementChild.appendChild(shell);
 }
 
 class KernelCallPromise {
@@ -881,6 +883,7 @@ async function worker_mount({
     Inode: Inode,
     File: File,
     PreopenDirectory: PreopenDirectory,
+    WASIProcExit: WASIProcExit,
   };
 
   if (wasi_root_fs) {

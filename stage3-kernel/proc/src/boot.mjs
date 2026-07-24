@@ -455,9 +455,18 @@ export default async function(configuration) {
 
     const instance = await WebAssembly.instantiate(wasm, wasi_imports);
     wasi_exports = instance.exports;
-    await newWasi.start({ 'exports': wasi_exports });
+    newWasi.initialize({ 'exports': wasi_exports });
 
-    remote._reap(/*fid*/ 0, /*status*/ 0, newWasi);
+    var proc_exit = 0;
+    try {
+      await (WebAssembly.promising(newWasi.inst.exports._start)());
+    } catch (e) {
+      proc_exit = e.code;
+    } finally {
+      remote._reap(/*fid*/ 0, /*status*/ proc_exit, newWasi);
+    }
+
+    console.log('Reaped init process', configuration);
   } catch (e) {
     if (typeof(e) == 'string' && e == 'exit with exit code 0') {} else {
       console.dir(typeof(e), e);
