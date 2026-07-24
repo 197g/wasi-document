@@ -3,10 +3,12 @@ index-html = "index.html"
 filesystem-root = "root"
 
 [[Document.Install]]
-git = "https://github.com/197g/fidget"
-package = "fidget-cli"
-rev = "73660486822753cbc1045c25749a4fb991dc01a5"
-default-features = false
+name = "stak"
+package = "stak"
+
+[[Document.Install]]
+name = "stak-compile"
+package = "stak-compile"
 
 [Machine]
 stage2 = { flavor = "node", workdir = "../../stage2-loader", build = "build.mjs" }

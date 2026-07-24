@@ -1,6 +1,18 @@
 <html>
 	<head>
+		<meta itemprop=wasi-document content=init-declarative />
+		<meta itemprop=wasi-document content=wasi-document-output />
+
+		<template class=wasi-document-process data-process=chksum>
+			<div itemprop=args>bin/coreutils.wasm</div>
+			<div itemprop=args>sha256sum</div>
+			<div itemprop=args>bin/coreutils.wasm</div>
+			<div itemprop=args>etc/wasi-release</div>
+			<div itemprop=fd data-fd=1></div>
+		</template>
 	</head>
 	<body>
+		<wasi-document-output data-wasi-process=chksum>
+		</wasi-document-output>
 	</body>
 </html>

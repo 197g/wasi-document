@@ -3,13 +3,10 @@ index-html = "index.html"
 filesystem-root = "root"
 
 [[Document.Install]]
-git = "file:///"
-package = "dc-plot"
-
-[[Document.Install]]
-path = "."
-package = "sewing-pack-files"
-bin = "sewing-pack-files"
+git = "https://github.com/uutils/coreutils"
+package = "coreutils"
+default-features = false
+features = ["feat_wasm"]
 
 [Machine]
 stage2 = { flavor = "node", workdir = "../../stage2-loader", build = "build.mjs" }
