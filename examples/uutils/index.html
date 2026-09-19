@@ -8,11 +8,12 @@
 			<div itemprop=args>sha256sum</div>
 			<div itemprop=args>bin/coreutils.wasm</div>
 			<div itemprop=args>etc/wasi-release</div>
-			<div itemprop=fd data-fd=1></div>
+			<span itemprop=fd data-fd=1></span>
 		</template>
 	</head>
+	<script>document.addEventListener('wasi-process-settled', console.info)</script>
 	<body>
-		<wasi-document-output data-wasi-process=chksum>
+		<wasi-document-output data-wasi-process=chksum command=event>
 		</wasi-document-output>
 	</body>
 </html>

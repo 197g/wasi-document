@@ -3,7 +3,7 @@ index-html = "index.html"
 filesystem-root = "root"
 
 [[Document.Install]]
-git = "https://github.com/uutils/coreutils"
+name = "coreutils"
 package = "coreutils"
 default-features = false
 features = ["feat_wasm"]

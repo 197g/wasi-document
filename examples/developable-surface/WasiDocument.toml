@@ -3,7 +3,7 @@ index-html = "index.html"
 filesystem-root = "root"
 
 [[Document.Install]]
-git = "https://github.com/197g/developable-curve"
+path = "/home/aurelia/code/developable-curve/bin/plot"
 package = "dc-plot"
 
 [[Document.Install]]

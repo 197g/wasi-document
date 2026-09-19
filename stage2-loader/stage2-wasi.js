@@ -569,10 +569,8 @@ async function initialize_firmware(worker_state) {
         // happen in the same tick, be my guest. I think that's a bad idea and
         // let's just acquire the element after..
         if (shadowRoot.querySelector('slot')) {
-          console.trace('slots, so we render on event');
           shadowRoot.addEventListener('slotchange', this.#ondefinitionready.bind(this, rendered), { once: false });
         } else {
-          console.trace('no slots, we render now');
           this.#ondefinitionready(rendered);
         }
       }
@@ -583,8 +581,9 @@ async function initialize_firmware(worker_state) {
 
         worker_state.kernel.create_proc.promise.then(() => {
           console.log('Creating process with', create_process);
-
           let reaper = worker_state.createProcess(create_process);
+          this.fid = reaper.fid;
+
           reaper.promise().then((result) => {
             this.#assignresult(rendered, result);
           });
@@ -636,14 +635,26 @@ async function initialize_firmware(worker_state) {
 
       #assignresult(rendered, { stdout, stderr, status }) {
         rendered.remove();
-        // NOTE: we should have an attribute to modify the encoding? Nah. UTF-8 is good.
-        const utf8decoder = new TextDecoder();
-        // TODO: we should have an attribute to modify where to put this. You
-        // may not always want to replace the entire content and since we are
-        // already doing things with slots, maybe a reserved slot name should
-        // let you list elements to be replaced. Also, differentiate between
-        // `innerHTML`, `textContent`, `value`, `outerHTML`?
-        this.innerHTML = utf8decoder.decode(stdout);
+
+        const command = this.getAttribute('command');
+        const commandFor = this.getAttribute('commandFor');
+
+        let target = commandFor ? document.getElementById(commandFor) : this;
+
+        if (command == "stdout" || command == null) {
+          // NOTE: we should have an attribute to modify the encoding? Nah. UTF-8 is good.
+          const utf8decoder = new TextDecoder();
+          target.innerHTML = utf8decoder.decode(stdout);
+        } else if (command == "stderr") {
+          const utf8decoder = new TextDecoder();
+          target.innerHTML = utf8decoder.decode(stderr);
+        } else if (command == "event") {
+          let event = new CustomEvent('wasi-process-settled', {
+            detail: { stdout, stderr, status, fid: this.fid },
+          });
+
+          target.dispatchEvent(event);
+        }
       }
     }
 
